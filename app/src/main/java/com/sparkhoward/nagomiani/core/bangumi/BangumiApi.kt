@@ -15,6 +15,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.serializer
 import okhttp3.Call
 import okhttp3.Callback
@@ -26,11 +28,30 @@ import java.io.IOException
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
-/** 网络失败（可重试）；HTTP 状态码错误区分 401（需要重新登录） */
+/** 网络失败（可重试）；HTTP 状态码错误区分 401（需要重新登录）。
+ *  Http 的 message 带上响应体片段——看完同步等静默路径靠它把失败原因亮给用户 */
 sealed class BangumiError(message: String) : Exception(message) {
     class Network(cause: Throwable) : BangumiError("网络错误：${cause.message}")
     class Unauthorized : BangumiError("登录已过期")
-    class Http(val code: Int, body: String) : BangumiError("HTTP $code")
+    class Http(val code: Int, val body: String) : BangumiError("HTTP $code：${body.trim().take(160).ifEmpty { "无响应体" }}")
+
+    companion object {
+        /** 把异常提炼成给用户看的可读原因：bgm 错误响应体形如
+         *  {"title":"Bad Request","description":"...","details":{...}}，优先取 description/title；
+         *  其余异常透传 message（截断） */
+        fun describe(e: Throwable): String = when (e) {
+            is Http -> {
+                val reason = runCatching {
+                    val obj = Json.parseToJsonElement(e.body) as? JsonObject
+                    val desc = obj?.get("description") as? JsonPrimitive
+                    val title = obj?.get("title") as? JsonPrimitive
+                    (desc?.takeIf { it.content.isNotBlank() } ?: title)?.content
+                }.getOrNull()
+                "HTTP ${e.code}" + (reason?.let { "：$it" } ?: "：${e.body.trim().take(60)}")
+            }
+            else -> (e.message ?: e.toString()).take(120)
+        }
+    }
 }
 
 /**
@@ -204,8 +225,11 @@ class BangumiApi(private val tokenProvider: suspend () -> String?) {
                 .apply {
                     tokenProvider()?.let { header("Authorization", "Bearer $it") }
                     when (method) {
-                        "POST" -> post((body ?: "{}").toRequestBody("application/json; charset=utf-8".toMediaType()))
-                        "PATCH" -> patch2((body ?: "{}").toRequestBody("application/json; charset=utf-8".toMediaType()))
+                        // bgm 服务器要求 Content-Type 精确为 application/json——okhttp 的
+                        // String.toRequestBody 会给无 charset 的类型偷偷补 "; charset=utf-8"（实测 415），
+                        // 必须用字节数组构造，content-type 才会原样透传
+                        "POST" -> post((body ?: "{}").encodeToByteArray().toRequestBody("application/json".toMediaType()))
+                        "PATCH" -> patch2((body ?: "{}").encodeToByteArray().toRequestBody("application/json".toMediaType()))
                     }
                 }
                 .build()

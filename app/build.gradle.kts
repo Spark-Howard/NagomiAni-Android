@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -13,8 +15,8 @@ android {
         applicationId = "com.sparkhoward.nagomiani"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.1.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -37,10 +39,28 @@ android {
         tasks.named("preBuild") { dependsOn("generateDanmakuCredentials") }
     }
 
+    // 发布签名：仓库根目录放置 gitignored 的 signing.private（四行：storeFile/storePassword/keyAlias/
+    // keyPassword，storeFile 相对路径以仓库根为基准）。缺失时 release 回退 debug 签名——同机自用分发
+    // 足够（debug.keystore 稳定）；正式分发建议 keytool 生成专用 keystore 后补上该文件。
+    // 应用内更新要求新旧包签名一致，签名变更后老用户必须卸载重装。
+    val signingPropsFile = rootProject.file("signing.private")
+    signingConfigs {
+        if (signingPropsFile.isFile) {
+            val props = Properties().also { properties -> signingPropsFile.inputStream().use { stream -> properties.load(stream) } }
+            create("release") {
+                storeFile = rootProject.file(props.getProperty("storeFile"))
+                storePassword = props.getProperty("storePassword")
+                keyAlias = props.getProperty("keyAlias")
+                keyPassword = props.getProperty("keyPassword")
+            }
+        }
+    }
     buildTypes {
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            signingConfig = if (signingPropsFile.isFile) signingConfigs.getByName("release")
+                else signingConfigs.getByName("debug")
         }
     }
     compileOptions {

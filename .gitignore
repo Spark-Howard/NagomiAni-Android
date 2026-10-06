@@ -8,4 +8,7 @@ local.properties
 .externalNativeBuild
 .cxx
 DanmakuCredentials.private
+signing.private
+*.jks
+*.keystore
 app/src/main/assets/danmaku-credentials.bin

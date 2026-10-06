@@ -65,12 +65,18 @@ object Http {
         }
     }
 
-    /** 分层 DNS：bgm 系域名（必被污染）DoH 优先、边缘 IP 兜底；
+    /** 分层 DNS：bgm 系域名（易被污染）DoH 优先、边缘 IP 次之、系统 DNS 垫底
+     *  （DoH 被墙 + 边缘 IP 过期的网络若系统解析正常也能活，如电脑直连/模拟器）；
      *  其他域名系统 DNS 优先、DoH 结果垫底（运营商劫持返回假 IP 时，连接失败会自动顺延到真 IP） */
     private class AppDns : Dns {
         override fun lookup(hostname: String): List<InetAddress> {
             val inBgmZone = hostname == BGM_ZONE || hostname.endsWith(".$BGM_ZONE")
-            if (inBgmZone) return dohLookup(hostname) ?: bgmZoneFallback
+            if (inBgmZone) {
+                val doh = dohLookup(hostname)
+                if (doh != null) return doh
+                val system = runCatching { Dns.SYSTEM.lookup(hostname) }.getOrDefault(emptyList())
+                return bgmZoneFallback + system
+            }
             val system = try {
                 Dns.SYSTEM.lookup(hostname)
             } catch (e: Exception) {

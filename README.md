@@ -10,10 +10,11 @@ macOS 桌面应用 [NagomiAni](https://github.com/Spark-Howard/NagomiAni) 的 An
 | 搜索 | Bangumi 条目搜索（动漫过滤）＋「最近更新（过去一周）」周历（今天在前，含空档日） |
 | 条目详情 | 头图/评分/排名/标签/infobox/简介；我的收藏五态（想看/看过/在看/搁置/抛弃）；**在线观看**跨片源搜索与分集点播 |
 | 在线片源 | MacCMS V10 采集站协议（内置量子/极速/爱坤/暴风 4 站＋用户自加站点）；`$$$`/`#`/`$` 剧集文法、HTML 实体双重转义解码、动漫分类过滤、多线路（换线路保留进度） |
-| 播放器 | ExoPlayer 全屏播放；断点续播（<15s 不续、距尾 30s 视为看完、5s 节流落盘）；看完自动同步 Bangumi（95% 或 EOF，≥300s，seek 后 10s 不判定，离线队列 200 条补同步）；95%/EOF 连播征询条（点「看下一集」才切换）；播放中底栏可切线路 |
+| 播放器 | ExoPlayer 全屏播放；断点续播（<15s 不续、距尾 30s 视为看完、5s 节流落盘）；看完自动同步 Bangumi（90% 或 EOF，≥300s，seek 后 10s 不判定，未收藏自动补「在看」再标记，离线队列 200 条补同步）；95%/EOF 连播征询条（点「看下一集」才切换）；播放中底栏可切线路；全屏手势（单击控制条、双击播放/暂停、横拖滑进度、长按 3× 快进、右/左半侧上下滑调音量/亮度） |
 | 弹幕 | dandanplay 开放 API（SHA256 签名、番名+集号匹配「宁缺毋滥」）；Choreographer 逐帧 Canvas 渲染（与 mac 版同管线语义：墙钟插值 + 锚点陈旧钳制 1.5s + 暂停完全冻结）；车道算法常量与 mac 版一致（滚动 12s / 停留 5s / 上方 75% 区域）；设置弹层（开关/字号/颜色三模式+色板/不透明度，即时生效并持久化） |
 | 番库 | 继续观看（resume 聚合、一番一卡、进度条，点击续播）；云端番库（收藏的片源、新集计数、已看徽章、分集点播、移除） |
-| 追番 | Bangumi OAuth 登录（内嵌 WebView + 本机 127.0.0.1:8123 回调，复用 mac 版注册的 client）；收藏五态列表 |
+| 追番 | Bangumi OAuth 登录（内嵌 WebView + 本机 127.0.0.1:8123 回调，复用 mac 版注册的 client）；收藏五态列表；页头刷新按钮手动重拉用户信息与收藏 |
+| 更新 | 启动时静默检查 GitHub Releases（`releases/latest`，无新版本/失败均不打扰）；发现新 tag 弹更新框（可「下次再说」跳过该版本）；应用内下载 APK 带进度，经 FileProvider 唤起系统安装器（Android 8+ 需允许「安装未知应用」）；发布流程见下 |
 | 视觉 | 樱粉主题完整还原（accent #EC6A88、浅色 #FFF7F9 / 深色 #20181B、胶囊按钮/粉描边卡片/分段选择器/徽章） |
 
 ## 构建与安装
@@ -27,6 +28,19 @@ macOS 桌面应用 [NagomiAni](https://github.com/Spark-Howard/NagomiAni) 的 An
 ```
 
 或用 Android Studio 打开本目录直接 Run。
+
+## 发布新版本（应用内更新的分发渠道）
+
+1. 改 `app/build.gradle.kts` 的 `versionCode`（+1）与 `versionName`（如 `0.2.0`）
+2. `./gradlew assembleRelease` → 产物 `app/build/outputs/apk/release/app-release.apk`
+   - 发布签名：根目录放置 gitignored 的 `signing.private`（四行：storeFile / storePassword /
+     keyAlias / keyPassword，storeFile 相对路径以仓库根为基准）；缺失时回退 debug 签名
+     （同机自用分发足够；正式分发建议 `keytool` 生成专用 keystore。注意：应用内更新要求
+     新旧包签名一致，签名变更后老用户必须卸载重装）
+3. 在 GitHub 新建 Release：tag 填 `v0.2.0`（需与 versionName 对应，否则更新检查无法比较版本），
+   更新说明写在 body，附件挂上 APK
+
+应用侧即会自动发现该 Release 并提示更新；`releases/latest` 不含 pre-release 与 draft。
 
 ## 弹幕凭据（弹弹play）
 

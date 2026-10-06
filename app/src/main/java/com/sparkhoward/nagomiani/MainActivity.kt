@@ -8,24 +8,31 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -41,6 +48,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.sparkhoward.nagomiani.core.update.UpdateCenter
 import com.sparkhoward.nagomiani.player.PlayerScreen
 import com.sparkhoward.nagomiani.ui.bangumi.BangumiScreen
 import com.sparkhoward.nagomiani.ui.library.LibraryScreen
@@ -89,10 +97,14 @@ private fun NagomiNavHost() {
     LaunchedEffect(Unit) {
         // 拉起下载服务：载入缓存索引（缓存页/角标展示）并恢复上次被杀中断的下载
         com.sparkhoward.nagomiani.core.download.DownloadUtil.ensureServiceStarted(activityContext)
+        // 应用内更新：启动静默检查 GitHub Releases（无新版本/网络失败均不打扰）
+        com.sparkhoward.nagomiani.core.update.UpdateCenter.checkForUpdate(activityContext)
         if (android.os.Build.VERSION.SDK_INT >= 33) {
             notificationPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
         }
     }
+
+    UpdateHost()
 
     val tabs = listOf(
         Tab(Routes.SEARCH, "搜索", Icons.Filled.Search),
@@ -193,3 +205,85 @@ private fun NagomiNavHost() {
         }
     }
 }
+
+// MARK: - 应用内更新弹窗（发现新版本 → 下载进度 → 安装）
+
+@Composable
+private fun UpdateHost() {
+    val updateState by UpdateCenter.state.collectAsState()
+    if (updateState is UpdateCenter.State.Idle) return
+    val context = androidx.compose.ui.platform.LocalContext.current
+    when (val s = updateState) {
+        is UpdateCenter.State.Available -> AlertDialog(
+            onDismissRequest = { UpdateCenter.dismiss(context) },
+            title = { Text("发现新版本 ${s.release.tagName.removePrefix("v")}") },
+            text = {
+                Text(
+                    s.release.body?.trim()?.take(600)?.ifBlank { null } ?: "无更新说明",
+                    fontSize = 13.sp,
+                    modifier = Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState()),
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { UpdateCenter.startDownload(context, s.release) }) { Text("更新") }
+            },
+            dismissButton = {
+                TextButton(onClick = { UpdateCenter.dismiss(context) }) { Text("下次再说") }
+            },
+        )
+
+        is UpdateCenter.State.Downloading -> AlertDialog(
+            onDismissRequest = {}, // 下载中不关闭（关闭也不取消下载，语义易误解）
+            title = { Text("正在下载更新") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    LinearProgressIndicator(
+                        progress = { if (s.total > 0) (s.received.toFloat() / s.total) else 0f },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Text(
+                        if (s.total > 0) "${fmtMB(s.received)} / ${fmtMB(s.total)}" else "${fmtMB(s.received)} / 未知大小",
+                        fontSize = 13.sp,
+                    )
+                }
+            },
+            confirmButton = {},
+        )
+
+        is UpdateCenter.State.ReadyToInstall -> AlertDialog(
+            onDismissRequest = { UpdateCenter.toIdle() },
+            title = { Text("更新已就绪") },
+            text = {
+                Text(
+                    "${s.release.tagName.removePrefix("v")} 下载完成，点「安装」唤起系统安装器。" +
+                        "若系统询问，请允许「安装未知应用」。",
+                    fontSize = 13.sp,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { UpdateCenter.install(context) }) { Text("安装") }
+            },
+            dismissButton = {
+                TextButton(onClick = { UpdateCenter.toIdle() }) { Text("稍后") }
+            },
+        )
+
+        is UpdateCenter.State.Failed -> AlertDialog(
+            onDismissRequest = { UpdateCenter.toIdle() },
+            title = { Text("更新失败") },
+            text = { Text(s.message, fontSize = 13.sp) },
+            confirmButton = {
+                if (s.release != null) {
+                    TextButton(onClick = { UpdateCenter.startDownload(context, s.release) }) { Text("重试") }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { UpdateCenter.toIdle() }) { Text("关闭") }
+            },
+        )
+
+        UpdateCenter.State.Idle -> Unit
+    }
+}
+
+private fun fmtMB(bytes: Long): String = "%.1f MB".format(bytes / (1024.0 * 1024.0))

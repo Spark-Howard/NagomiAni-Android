@@ -1,8 +1,12 @@
 package com.sparkhoward.nagomiani.player
 
+import android.content.Context
 import android.content.pm.ActivityInfo
+import android.media.AudioManager
 import android.os.Build
+import android.provider.Settings
 import android.view.ViewGroup
+import android.view.Window
 import android.view.WindowManager
 import android.widget.FrameLayout
 import androidx.activity.compose.BackHandler
@@ -14,6 +18,9 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -35,11 +42,13 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowCircleRight
+import androidx.compose.material.icons.filled.Brightness6
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -61,6 +70,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -72,6 +83,8 @@ import androidx.media3.ui.PlayerView
 import com.sparkhoward.nagomiani.ui.theme.NagomiColors
 import com.sparkhoward.nagomiani.ui.theme.NagomiSecondaryButton
 import kotlinx.coroutines.delay
+import kotlin.math.abs
+import kotlin.math.roundToInt
 
 /**
  * 播放器页（黑底影院）：
@@ -100,6 +113,18 @@ fun PlayerScreen(onClose: () -> Unit, viewModel: PlayerViewModel = viewModel()) 
     val originalOrientation = remember { activity?.requestedOrientation ?: ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED }
     val originalCutoutMode = remember {
         if (Build.VERSION.SDK_INT >= 28) activity?.window?.attributes?.layoutInDisplayCutoutMode else null
+    }
+    // 进页时的窗口亮度（-1 = 跟随系统），离开播放器时还原
+    val originalBrightness = remember {
+        activity?.window?.attributes?.screenBrightness ?: WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+    }
+    DisposableEffect(Unit) {
+        onDispose {
+            // 还原手势亮度调节对窗口的改动（单 Activity 应用，不还原会带出播放器外）
+            activity?.window?.attributes = activity?.window?.attributes?.also {
+                it.screenBrightness = originalBrightness
+            }
+        }
     }
 
     // 方向 + 沉浸式系统栏：竖屏=系统栏可见；全屏=横屏 + 状态栏/导航栏隐藏（侧滑临时呼出）
@@ -147,6 +172,14 @@ fun PlayerScreen(onClose: () -> Unit, viewModel: PlayerViewModel = viewModel()) 
     var isSeeking by remember { mutableStateOf(false) }
     var seekPreview by remember { mutableStateOf(0.0) }
     var showDanmakuSheet by remember { mutableStateOf(false) }
+
+    // 全屏手势：进度/音量/亮度 HUD 与长按倍速状态
+    var seekHud by remember { mutableStateOf<SeekHud?>(null) }
+    var volumeHud by remember { mutableStateOf<Float?>(null) }
+    var brightnessHud by remember { mutableStateOf<Float?>(null) }
+    var boosting by remember { mutableStateOf(false) }
+    var boostBaseSpeed by remember { mutableStateOf(1f) }
+    val audioManager = remember { activity?.getSystemService(Context.AUDIO_SERVICE) as? AudioManager }
 
     // 控制条自动隐藏（3s，播放中才隐藏）
     LaunchedEffect(controlsVisible, state.isPlaying, state.isBuffering, ui.isLoading, ui.nextOffer) {
@@ -210,15 +243,182 @@ fun PlayerScreen(onClose: () -> Unit, viewModel: PlayerViewModel = viewModel()) 
                 )
             }
 
-            // 手势层：点击 = 切换控制条显隐
+            // 手势层：竖屏 = 点击切控制条；全屏 = 单击切控制条 + 双击播放/暂停 + 横拖滑进度 +
+            // 长按 3× 快进 + 右半侧上下滑调音量 / 左半侧上下滑调亮度
+            val gestureInteraction = remember { MutableInteractionSource() }
             Box(
                 Modifier
                     .fillMaxSize()
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                    ) { controlsVisible = !controlsVisible },
+                    .then(
+                        if (isFullscreen) Modifier
+                            .pointerInput(Unit) {
+                                detectTapGestures(
+                                    onTap = { controlsVisible = !controlsVisible },
+                                    onDoubleTap = { viewModel.togglePlayPause() },
+                                    onLongPress = {
+                                        if (state.isPlaying && !boosting) {
+                                            boostBaseSpeed = viewModel.speed.value
+                                            boosting = true
+                                            viewModel.setSpeed(3f)
+                                        }
+                                    },
+                                    onPress = {
+                                        tryAwaitRelease()
+                                        // 长按快进在抬手时还原用户倍速（快进中离开页面由 dispose 兜底）
+                                        if (boosting) {
+                                            boosting = false
+                                            viewModel.setSpeed(boostBaseSpeed)
+                                        }
+                                    },
+                                )
+                            }
+                            .pointerInput(Unit) {
+                                val touchSlop = viewConfiguration.touchSlop
+                                val boxSize = size
+                                awaitEachGesture {
+                                    val down = awaitFirstDown(requireUnconsumed = false)
+                                    var mode = 0 // 0 待定 / 1 进度 / 2 音量 / 3 亮度
+                                    var totalX = 0f
+                                    var totalY = 0f
+                                    var seekStart = 0.0
+                                    var volumeStart = 0
+                                    var volumeMax = 1
+                                    var brightnessStart = 0.5f
+                                    while (true) {
+                                        val event = awaitPointerEvent()
+                                        val change = event.changes.firstOrNull { it.pressed } ?: break
+                                        val delta = change.positionChange()
+                                        totalX += delta.x
+                                        totalY += delta.y
+                                        if (mode == 0) {
+                                            val absX = abs(totalX)
+                                            val absY = abs(totalY)
+                                            if (absX > touchSlop || absY > touchSlop) {
+                                                mode = when {
+                                                    absX > absY && state.durationSeconds >= 1.0 -> 1
+                                                    absY > absX && down.position.x >= boxSize.width / 2f && audioManager != null -> 2
+                                                    absY > absX && activity?.window != null -> 3
+                                                    else -> 0 // 横拖但时长未知：不进入任何模式
+                                                }
+                                                when (mode) {
+                                                    1 -> {
+                                                        seekStart = if (isSeeking) seekPreview else state.positionSeconds
+                                                        isSeeking = true
+                                                        controlsVisible = false
+                                                    }
+                                                    2 -> {
+                                                        volumeMax = audioManager!!.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+                                                        volumeStart = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+                                                    }
+                                                    3 -> brightnessStart = currentBrightness(activity?.window)
+                                                }
+                                            }
+                                        }
+                                        if (mode != 0) {
+                                            when (mode) {
+                                                1 -> {
+                                                    val duration = state.durationSeconds
+                                                    val target = (seekStart + totalX / boxSize.width * duration)
+                                                        .coerceIn(0.0, duration)
+                                                    seekPreview = target
+                                                    seekHud = SeekHud(target - seekStart, target)
+                                                }
+                                                2 -> {
+                                                    val target = volumeStart + (-totalY / boxSize.height * volumeMax).roundToInt()
+                                                        .coerceIn(0, volumeMax)
+                                                    audioManager!!.setStreamVolume(AudioManager.STREAM_MUSIC, target, 0)
+                                                    volumeHud = if (volumeMax > 0) target / volumeMax.toFloat() else 0f
+                                                }
+                                                else -> {
+                                                    val target = (brightnessStart - totalY / boxSize.height)
+                                                        .coerceIn(0.01f, 1f)
+                                                    activity?.window?.attributes = activity?.window?.attributes
+                                                        ?.also { it.screenBrightness = target }
+                                                    brightnessHud = target
+                                                }
+                                            }
+                                            change.consume()
+                                        }
+                                    }
+                                    // 抬手/取消：进度应用、收起 HUD
+                                    when (mode) {
+                                        1 -> {
+                                            viewModel.seekTo(seekPreview)
+                                            isSeeking = false
+                                            seekHud = null
+                                        }
+                                        2 -> volumeHud = null
+                                        3 -> brightnessHud = null
+                                    }
+                                }
+                            }
+                        else Modifier.clickable(
+                            interactionSource = gestureInteraction,
+                            indication = null,
+                        ) { controlsVisible = !controlsVisible }
+                    ),
             )
+
+            // 全屏手势 HUD：进度预览（中央）
+            seekHud?.let { hud ->
+                Row(
+                    Modifier
+                        .align(Alignment.Center)
+                        .background(Color.Black.copy(alpha = 0.65f), RoundedCornerShape(999.dp))
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        if (hud.delta >= 0) "▶▶" else "◀◀",
+                        color = NagomiColors.accent,
+                        fontSize = 14.sp,
+                    )
+                    Spacer(Modifier.size(8.dp))
+                    Text(
+                        "${formatSeekDelta(hud.delta)} / ${PlayerViewModel.formatTime(hud.target)}",
+                        color = Color.White,
+                        fontSize = 13.sp,
+                    )
+                }
+            }
+
+            // 全屏手势 HUD：长按 3× 快进（中央偏上）
+            if (boosting) {
+                Text(
+                    "3× 快进中 ▶▶▶",
+                    color = NagomiColors.accent,
+                    fontSize = 14.sp,
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .padding(bottom = 110.dp)
+                        .background(Color.Black.copy(alpha = 0.65f), RoundedCornerShape(999.dp))
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                )
+            }
+
+            // 全屏手势 HUD：音量（右侧）/ 亮度（左侧）竖条
+            volumeHud?.let { fraction ->
+                GestureHudBar(
+                    fraction = fraction,
+                    icon = { tint, size ->
+                        Icon(Icons.Filled.VolumeUp, "音量", tint = tint, modifier = Modifier.size(size))
+                    },
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .padding(end = 24.dp),
+                )
+            }
+            brightnessHud?.let { fraction ->
+                GestureHudBar(
+                    fraction = fraction,
+                    icon = { tint, size ->
+                        Icon(Icons.Filled.Brightness6, "亮度", tint = tint, modifier = Modifier.size(size))
+                    },
+                    modifier = Modifier
+                        .align(Alignment.CenterStart)
+                        .padding(start = 24.dp),
+                )
+            }
 
             // 加载/错误状态（pending 未就位 = 点播仍在取流装配）
             if (pending == null || ui.isLoading || state.isBuffering) {
@@ -239,9 +439,10 @@ fun PlayerScreen(onClose: () -> Unit, viewModel: PlayerViewModel = viewModel()) 
                 )
             }
 
-            // 状态提示条（续播/同步消息，4s 自动消失）
+            // 状态提示条（续播/同步消息，4s 自动消失）：不看控制条是否可见——
+            // 看完同步的成功/失败提示多发生在控制条已隐藏时，必须让它露出来
             val message = ui.statusMessage
-            if (message != null && controlsVisible) {
+            if (message != null) {
                 Text(
                     message,
                     color = Color.White,
@@ -623,5 +824,62 @@ private fun EpisodeChip(number: Int, isCurrent: Boolean, modifier: Modifier = Mo
             fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,
             color = if (isCurrent) Color.White else MaterialTheme.colorScheme.onSurface,
         )
+    }
+}
+
+// MARK: - 全屏手势（进度/音量/亮度）类型与工具
+
+/** 进度拖动 HUD：delta = 相对起点的偏移秒数（负 = 回退），target = 目标时间点 */
+private data class SeekHud(val delta: Double, val target: Double)
+
+private fun formatSeekDelta(delta: Double): String {
+    val sign = if (delta >= 0) "+" else "-"
+    return sign + PlayerViewModel.formatTime(abs(delta))
+}
+
+/** 当前窗口亮度；从未设置过（-1）时读系统亮度，再失败取 0.5 */
+private fun currentBrightness(window: Window?): Float {
+    if (window == null) return 0.5f
+    window.attributes.screenBrightness.takeIf { it in 0.01f..1f }?.let { return it }
+    return try {
+        (Settings.System.getInt(window.context.contentResolver, Settings.System.SCREEN_BRIGHTNESS) / 255f)
+            .coerceIn(0.05f, 1f)
+    } catch (e: Exception) {
+        0.5f
+    }
+}
+
+/** 音量/亮度 HUD：竖向指示条 + 图标 + 百分比 */
+@Composable
+private fun GestureHudBar(
+    fraction: Float,
+    icon: @Composable (Color, androidx.compose.ui.unit.Dp) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val barHeight = 140.dp
+    Column(
+        modifier
+            .background(Color.Black.copy(alpha = 0.65f), RoundedCornerShape(12.dp))
+            .padding(horizontal = 10.dp, vertical = 12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Box(Modifier.height(barHeight).width(6.dp)) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(Color.White.copy(alpha = 0.25f), RoundedCornerShape(999.dp)),
+            )
+            Box(
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .height(barHeight * fraction.coerceIn(0f, 1f))
+                    .background(NagomiColors.accent, RoundedCornerShape(999.dp)),
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        icon(Color.White, 18.dp)
+        Spacer(Modifier.height(4.dp))
+        Text("${(fraction * 100).roundToInt()}%", color = Color.White, fontSize = 11.sp)
     }
 }

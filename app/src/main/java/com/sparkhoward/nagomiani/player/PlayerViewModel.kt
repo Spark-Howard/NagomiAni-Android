@@ -13,8 +13,11 @@ import androidx.media3.exoplayer.source.MediaSource
 import com.sparkhoward.nagomiani.AppGraph
 import com.sparkhoward.nagomiani.core.bangumi.BangumiApi
 import com.sparkhoward.nagomiani.core.bangumi.BangumiAuth
+import com.sparkhoward.nagomiani.core.bangumi.BangumiError
 import com.sparkhoward.nagomiani.core.dandanplay.DandanplayApi
 import com.sparkhoward.nagomiani.core.maccms.OnlineRepo
+import com.sparkhoward.nagomiani.core.model.CollectionModifyPayload
+import com.sparkhoward.nagomiani.core.model.CollectionType
 import com.sparkhoward.nagomiani.core.model.OnlineEpisode
 import com.sparkhoward.nagomiani.core.model.OnlinePlayback
 import com.sparkhoward.nagomiani.core.model.OnlineShow
@@ -29,8 +32,9 @@ import kotlinx.coroutines.launch
 
 /**
  * 播放器 ViewModel：与 mac 版 PlayerModel 同语义——
- * 断点续播（<15s 不续 / 距尾 30s 视为看完 / 5s 节流落盘）、95% 或 EOF 看完同步
- * （≥300s、seek 后 10s 不判定、离线入队 200 条）、95%/EOF 连播征询条、线路切换保留进度。
+ * 断点续播（<15s 不续 / 距尾 30s 视为看完 / 5s 节流落盘）、看完同步双触发：
+ * 90% 停留判定（≥300s、seek 后 10s 不判定、拖动重新武装）+ EOF 无条件必同步，
+ * 失败离线入队 200 条、90%/EOF 连播征询条、线路切换保留进度。
  */
 class PlayerViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -116,7 +120,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             val ep = eps.firstOrNull { it.number == number } ?: return@launch
             val nextPlayback = onlineRepo.preparePlayback(showOf(item), ep, item.showTitle) ?: return@launch
             stopPlayback()
-            start(nextPlayback)
+            start(nextPlayback, forceRestart = nextPlayback.resumeKey == item.resumeKey)
         }
     }
 
@@ -181,6 +185,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     private var lastSeekAt: Long = 0
     private var nextOfferTriggered = false
     private var markedThisSession = HashSet<String>()
+    private val confirmedCollected = HashSet<Int>()
     private var periodicJob: Job? = null
 
     /** ExoPlayer 事件桥（PlayerScreen 的 Compose 状态用） */
@@ -194,10 +199,12 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
 
     val playerState = MutableStateFlow(PlayerState())
 
-    fun start(item: OnlinePlayback) {
-        if (playback?.resumeKey == item.resumeKey && exoPlayer != null) return
+    fun start(item: OnlinePlayback, forceRestart: Boolean = false) {
+        if (!forceRestart && playback?.resumeKey == item.resumeKey && exoPlayer != null) return
         playback = item
         nextOfferTriggered = false
+        // 重进/重播同一集允许重新判定看完同步（否则首播已入列的 key 会挡住后续所有同步）
+        markedThisSession.remove("${item.seriesKey}:${item.episodeNumber}")
         currentRouteIndex = 0 // 新会话从首选线路开始（上集切过线路时必须复位）
         ui.value = UIState(title = item.displayTitle ?: "", isLoading = true)
 
@@ -293,7 +300,12 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         val player = exoPlayer ?: return
         if (player.isPlaying) player.pause()
         else {
-            if (player.playbackState == Player.STATE_ENDED) player.seekTo(0)
+            if (player.playbackState == Player.STATE_ENDED) {
+                // 播完重播：复位看完/连播判定，重看可再次触发同步
+                player.seekTo(0)
+                nextOfferTriggered = false
+                playback?.let { markedThisSession.remove("${it.seriesKey}:${it.episodeNumber}") }
+            }
             player.play()
         }
     }
@@ -305,6 +317,10 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
 
     fun seekTo(seconds: Double) {
         lastSeekAt = System.currentTimeMillis()
+        // 主动拖动重新武装看完判定——否则断点续播落在 90% 后的隐形判定会消费掉
+        // 一次性标记，用户后续「拉到最后+看10秒」全部被静默跳过
+        nextOfferTriggered = false
+        playback?.let { markedThisSession.remove("${it.seriesKey}:${it.episodeNumber}") }
         exoPlayer?.seekTo((seconds * 1000).toLong())
     }
 
@@ -348,8 +364,8 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
                     store.updateResume(item.resumeKey, position, duration)
                 }
 
-                // 看完同步（95%，≥300s，seek 后 10s 不判定）+ 连播提示（同阈值）
-                if (duration >= 300 && position / duration >= 0.95) {
+                // 看完同步（90%，≥300s，seek 后 10s 不判定）+ 连播提示（同阈值）
+                if (duration >= 300 && position / duration >= 0.90) {
                     val seekFresh = System.currentTimeMillis() - lastSeekAt < 10_000
                     if (!seekFresh) {
                         if (!nextOfferTriggered) {
@@ -368,35 +384,66 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             // 播完清记录（下次从头）
             store.removeResume(item.resumeKey)
-            if (!nextOfferTriggered) {
-                nextOfferTriggered = true
-                markWatched(item)
-                offerNextEpisode(item)
-            }
+            // EOF 是确定的「看完」：无条件同步（幂等）+ 无条件提供下一集，
+            // 不受 90% 一次性判定影响——顺着正常看完永远会同步
+            markWatched(item, force = true)
+            offerNextEpisode(item)
         }
     }
 
-    /** 看完同步：有绑定→PATCH watched；失败→离线队列（联网后由 LibraryScreen 冲刷） */
-    private fun markWatched(item: OnlinePlayback) {
+    /** 看完同步：有绑定→PATCH watched；失败→离线队列（下次进播放器页时冲刷）。
+     *  [force] = EOF 等确定性看完时刻，绕过会话内去重无条件重试；
+     *  成功才记入已同步集合，失败移除——90%/EOF/重看随时可重试。
+     *  失败提示 = 失败步骤 + bgm 返回的可读原因，便于在真机上定位 */
+    private fun markWatched(item: OnlinePlayback, force: Boolean = false) {
         val key = "${item.seriesKey}:${item.episodeNumber}"
-        if (!markedThisSession.add(key)) return
+        if (!force && !markedThisSession.add(key)) return
         viewModelScope.launch {
             val subjectID = item.boundSubjectID ?: store.bindingSubjectID(item.seriesKey)
             if (subjectID == null) return@launch
+            val api = BangumiApi { auth.refreshIfNeeded().accessToken }
+            var step = "获取分集列表"
             try {
-                val api = BangumiApi { auth.refreshIfNeeded().accessToken }
-                val episodes = api.allEpisodes(subjectID)
-                val ep = episodes.firstOrNull { kotlin.math.round(it.sort).toInt() == item.episodeNumber }
+                val ep = api.allEpisodes(subjectID)
+                    .firstOrNull { kotlin.math.round(it.sort).toInt() == item.episodeNumber }
                 if (ep == null) {
                     ui.value = ui.value.copy(statusMessage = "在 Bangumi 上未找到第 ${item.episodeNumber} 集，跳过同步")
                     return@launch
                 }
-                api.markEpisodes(subjectID, listOf(ep.id))
+                step = "确认收藏"
+                ensureCollected(api, subjectID)
+                step = "标记看过"
+                try {
+                    api.markEpisodes(subjectID, listOf(ep.id))
+                } catch (e: Exception) {
+                    // 400 常见于「条目未收藏」：补「在看」收藏后重试一次
+                    val recovered = if (e is BangumiError.Http && e.code == 400) runCatching {
+                        api.updateCollection(subjectID, CollectionModifyPayload(type = CollectionType.DOING.raw))
+                        api.markEpisodes(subjectID, listOf(ep.id))
+                    }.isSuccess else false
+                    if (!recovered) throw e
+                }
+                markedThisSession.add(key)
                 ui.value = ui.value.copy(statusMessage = "已同步：第 ${item.episodeNumber} 集标记为看过 ✓")
             } catch (e: Exception) {
+                markedThisSession.remove(key) // 失败：EOF / 重看时仍可重试
                 store.enqueuePendingMark(subjectID, item.episodeNumber)
-                ui.value = ui.value.copy(statusMessage = "同步失败，已记录待重试（离线补同步）")
+                android.util.Log.w("NagomiSync", "markWatched subject=$subjectID ep=${item.episodeNumber} step=$step", e)
+                ui.value = ui.value.copy(
+                    statusMessage = "同步失败[$step]：${BangumiError.describe(e)}（已记入离线队列）",
+                )
             }
+        }
+    }
+
+    /** 确保条目已收藏（未收藏条目无法标记单集看过）：缺收藏时补「在看」，已有收藏状态不覆盖 */
+    private suspend fun ensureCollected(api: BangumiApi, subjectID: Int) {
+        if (subjectID in confirmedCollected) return
+        if (api.myCollectionOf(subjectID) != null) {
+            confirmedCollected.add(subjectID)
+        } else {
+            api.updateCollection(subjectID, CollectionModifyPayload(type = CollectionType.DOING.raw))
+            confirmedCollected.add(subjectID)
         }
     }
 
@@ -444,19 +491,36 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         try {
             val api = BangumiApi { auth.refreshIfNeeded().accessToken }
             val remaining = ArrayList<AppStore.PendingMark>()
+            var firstError: String? = null
             for (mark in pending) {
+                var step = "确认收藏"
                 try {
-                    val episodes = api.allEpisodes(mark.subjectID)
-                    val ep = episodes.firstOrNull { kotlin.math.round(it.sort).toInt() == mark.episodeNumber }
+                    ensureCollected(api, mark.subjectID)
+                    step = "获取分集列表"
+                    val ep = api.allEpisodes(mark.subjectID)
+                        .firstOrNull { kotlin.math.round(it.sort).toInt() == mark.episodeNumber }
+                    step = "标记看过"
                     if (ep != null) api.markEpisodes(mark.subjectID, listOf(ep.id))
                 } catch (e: Exception) {
                     remaining += mark // 仍失败：留在队列
+                    if (firstError == null) {
+                        firstError = "[第${mark.episodeNumber}集·$step] ${BangumiError.describe(e)}"
+                        android.util.Log.w(
+                            "NagomiSync",
+                            "flush mark subject=${mark.subjectID} ep=${mark.episodeNumber} step=$step", e,
+                        )
+                    }
                 }
                 delay(300) // 尊重限频
             }
             store.replacePendingMarks(remaining)
-            if (remaining.size < pending.size) {
-                ui.value = ui.value.copy(statusMessage = "已补同步 ${pending.size - remaining.size} 条离线观看记录 ✓")
+            when {
+                remaining.isEmpty() ->
+                    ui.value = ui.value.copy(statusMessage = "已补同步 ${pending.size} 条离线观看记录 ✓")
+                remaining.size < pending.size ->
+                    ui.value = ui.value.copy(statusMessage = "已补同步 ${pending.size - remaining.size} 条，${remaining.size} 条待重试")
+                else ->
+                    ui.value = ui.value.copy(statusMessage = "补同步失败：${firstError ?: "未知错误"}（保留待重试）")
             }
         } catch (_: Exception) {
         }

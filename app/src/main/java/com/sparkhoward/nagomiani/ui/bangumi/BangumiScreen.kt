@@ -24,6 +24,8 @@ class BangumiViewModel(app: Application) : AndroidViewModel(app) {
 
     data class State(
         val loading: Boolean = true,
+        /** 手动刷新中（已有内容、原地刷新，页头按钮转圈） */
+        val refreshing: Boolean = false,
         val user: BangumiUser? = null,
         val selected: CollectionType = CollectionType.DOING,
         val collections: List<UserSubjectCollection> = emptyList(),
@@ -60,22 +62,25 @@ class BangumiViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** 手动刷新：重拉用户信息 + 当前分类收藏列表。
+     *  已有内容时原地刷新（不整页替换，页头按钮转圈）；仅首次加载才整页 spinner */
     fun refresh() {
         viewModelScope.launch {
             if (!auth.isLoggedIn()) {
                 state.value = State(loading = false)
                 return@launch
             }
-            state.value = state.value.copy(loading = true)
+            val hasContent = state.value.user != null
+            state.value = state.value.copy(loading = !hasContent, refreshing = hasContent)
             try {
                 val api = BangumiApi { auth.refreshIfNeeded().accessToken }
                 val user = api.me()
                 // 收藏列表端点按用户名寻址，先存下（未设用户名则退回 UID）
                 currentUsername = user.username.ifBlank { user.id.toString() }
-                state.value = state.value.copy(loading = false, user = user, error = null)
+                state.value = state.value.copy(loading = false, refreshing = false, user = user, error = null)
                 loadCollections()
             } catch (e: Exception) {
-                state.value = state.value.copy(loading = false, error = "加载失败：${e.message}")
+                state.value = state.value.copy(loading = false, refreshing = false, error = "加载失败：${e.message}")
             }
         }
     }

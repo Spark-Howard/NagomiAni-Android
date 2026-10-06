@@ -37,6 +37,7 @@ class AppStore(private val context: Context) {
         val danmakuOpacity = doublePreferencesKey("danmaku.opacity")
         val maccmsSites = stringSetPreferencesKey("online.maccms.sites")
         val networkProxy = stringPreferencesKey("network.proxy")                  // "host:port" 或空
+        val skippedUpdate = stringPreferencesKey("update.skippedVersion")         // 「下次再说」的 tag
         val bindings = stringPreferencesKey("bangumi.bindings.json")          // {seriesKey: subjectID}
         val boundNames = stringPreferencesKey("bangumi.boundNames.json")
         val cloudLibrary = stringPreferencesKey("online.library.entries.json") // [CloudEntry]
@@ -77,6 +78,12 @@ class AppStore(private val context: Context) {
     val networkProxyRaw: Flow<String> = context.dataStore.data.map { it[Keys.networkProxy] ?: "" }
 
     suspend fun setNetworkProxy(raw: String) = edit { it[Keys.networkProxy] = raw.trim() }
+
+    // MARK: - 应用内更新（「下次再说」记住的 tag，同版本不再打扰，出现更新版本重新提示）
+
+    val skippedUpdateVersion: Flow<String> = context.dataStore.data.map { it[Keys.skippedUpdate] ?: "" }
+    suspend fun skippedUpdateVersionOnce(): String = skippedUpdateVersion.first()
+    suspend fun setSkippedUpdateVersion(value: String) = edit { it[Keys.skippedUpdate] = value }
 
     // MARK: - Bangumi 绑定表（seriesKey → subjectID，本地/云端/已看同步共用）
 

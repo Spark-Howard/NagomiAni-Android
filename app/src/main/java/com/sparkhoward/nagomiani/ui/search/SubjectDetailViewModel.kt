@@ -198,13 +198,20 @@ class SubjectDetailViewModel(app: Application) : AndroidViewModel(app) {
             if (store.bindingSubjectID(show.seriesKey) == null) {
                 current?.let { subject ->
                     store.bind(show.seriesKey, subject.id, subject.displayName)
-                    if (auth.isLoggedIn()) {
-                        runCatching {
-                            val authed = BangumiApi { auth.refreshIfNeeded().accessToken }
+                }
+            }
+            // 未收藏则补「在看」（未收藏条目 Bangumi 不允许标记单集看过）：不再仅限首次绑定，
+            // 覆盖"未登录时首播、登录后补看"漏收藏的场景；已有收藏状态不覆盖
+            if (auth.isLoggedIn()) {
+                current?.let { subject ->
+                    runCatching {
+                        val authed = BangumiApi { auth.refreshIfNeeded().accessToken }
+                        if (authed.myCollectionOf(subject.id) == null) {
                             authed.updateCollection(
                                 subject.id,
                                 CollectionModifyPayload(type = CollectionType.DOING.raw),
                             )
+                            state.value = state.value.copy(myCollection = CollectionType.DOING.raw)
                         }
                     }
                 }
