@@ -268,9 +268,17 @@ fun LoginScreen(onDone: () -> Unit) {
     val auth = remember { BangumiAuth(context.applicationContext) }
     var status by remember { mutableStateOf("正在打开授权页…") }
     val state = remember { UUID.randomUUID().toString() }
-    val codeChannel = remember { kotlinx.coroutines.CompletableDeferred<String>() }
-    val targetUrl = remember { mutableStateOf<String?>(null) }
-    var loadedUrl by remember { mutableStateOf<String?>(null) }
+    // 授权码通道用 CONFLATED Channel：CompletableDeferred 是一次性的，换 token 失败后会永久死路
+    //（再点「授权」不会拦截回调，WebView 直连本机地址 → ERR_CONNECTION_REFUSED）
+    val codeChannel = remember { kotlinx.coroutines.channels.Channel<String>(kotlinx.coroutines.channels.Channel.CONFLATED) }
+    // 目标页 + 载入序号：失败重试要重开授权页（同一 URL 也必须真的 reload）
+    var targetUrl by remember { mutableStateOf<String?>(null) }
+    val loadSeq = remember { androidx.compose.runtime.mutableIntStateOf(0) }
+    var loadedSeq by remember { androidx.compose.runtime.mutableIntStateOf(-1) }
+    fun openURL(url: String) {
+        loadSeq.intValue += 1
+        targetUrl = url
+    }
 
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -299,8 +307,8 @@ fun LoginScreen(onDone: () -> Unit) {
                             val url = request?.url?.toString() ?: return false
                             if (url.startsWith("http://127.0.0.1:8123")) {
                                 val code = BangumiAuth.extractAuthorizationCode(url, state)
-                                if (code != null && !codeChannel.isCompleted) {
-                                    codeChannel.complete(code)
+                                if (code != null) {
+                                    codeChannel.trySend(code)
                                     // 不让 WebView 请求本机回环地址（代理/端口问题会 REFUSED），直接展示成功页
                                     view?.stopLoading()
                                     view?.loadDataWithBaseURL(
@@ -312,7 +320,7 @@ fun LoginScreen(onDone: () -> Unit) {
                                     )
                                     return true
                                 }
-                                if (!codeChannel.isCompleted) status = "收到回调，正在换取令牌…"
+                                status = "收到回调，正在换取令牌…"
                             }
                             return false
                         }
@@ -320,11 +328,16 @@ fun LoginScreen(onDone: () -> Unit) {
                 }
             },
             update = { view ->
-                val target = targetUrl.value
-                if (target != null && loadedUrl != target) {
-                    loadedUrl = target
+                val target = targetUrl
+                if (target != null && loadedSeq != loadSeq.intValue) {
+                    loadedSeq = loadSeq.intValue
                     view.loadUrl(target)
                 }
+            },
+            onRelease = { view ->
+                // 不销毁会泄漏整个 WebView（渲染线程/解码器资源），每次进登录页漏一个
+                view.stopLoading()
+                view.destroy()
             },
             modifier = Modifier.weight(1f),
         )
@@ -337,45 +350,50 @@ fun LoginScreen(onDone: () -> Unit) {
         val loggedIn = cookieManager.getCookie("https://bgm.tv")?.contains("chii_auth") == true
         if (loggedIn) {
             status = "bgm.tv 已登录，正在打开授权页…"
-            targetUrl.value = auth.authorizeURL(state)
+            openURL(auth.authorizeURL(state))
         } else {
             status = "请先在下方页面登录 bgm.tv 账号，成功后自动继续授权"
-            targetUrl.value = "https://bgm.tv/login"
+            openURL("https://bgm.tv/login")
             while (true) { // 退出页面时协程被取消，delay 处中断
                 kotlinx.coroutines.delay(800)
                 if (cookieManager.getCookie("https://bgm.tv")?.contains("chii_auth") == true) break
             }
             status = "登录成功，正在打开授权页…"
-            targetUrl.value = auth.authorizeURL(state)
+            openURL(auth.authorizeURL(state))
         }
-        // 备路径：本机回调服务（与 WebView 拦截先到先得）
-        val serverJob = launch {
-            val code = auth.awaitAuthorizationCode(expectedState = state) { url ->
-                if (!codeChannel.isCompleted) {
-                    BangumiAuth.extractAuthorizationCode(url, state)?.let { codeChannel.complete(it) }
+        // 换 token 失败可重试：重开授权页等用户再点「授权」（CONFLATED 通道可反复收码）
+        while (true) {
+            // 备路径：本机回调服务（与 WebView 拦截先到先得）
+            val serverJob = launch {
+                val code = auth.awaitAuthorizationCode(expectedState = state) { url ->
+                    BangumiAuth.extractAuthorizationCode(url, state)?.let { codeChannel.trySend(it) }
                 }
+                if (code != null) codeChannel.trySend(code)
             }
-            if (code != null) codeChannel.complete(code)
-        }
-        try {
-            val code = kotlinx.coroutines.withTimeout(360_000L) { codeChannel.await() }
-            status = "登录中…"
             try {
-                val session = auth.completeLogin(code)
-                if (session.isLoggedIn) {
-                    status = "登录成功 ✓"
-                    onDone()
-                } else {
+                val code = kotlinx.coroutines.withTimeout(360_000L) { codeChannel.receive() }
+                status = "登录中…"
+                try {
+                    val session = auth.completeLogin(code)
+                    if (session.isLoggedIn) {
+                        status = "登录成功 ✓"
+                        onDone()
+                        return@LaunchedEffect
+                    }
                     status = "登录失败：未取得令牌，请重试"
+                } catch (e: Exception) {
+                    // 换 token 失败（网络/授权码失效等）要显示出来，不能让协程异常顶穿崩溃
+                    status = "登录失败：${e.message ?: "网络错误"}，请重试"
                 }
+                openURL(auth.authorizeURL(state)) // 重开授权页（bgm.tv 登录态仍在，直接再授权）
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e // 页面退出：协程取消要如实传播
             } catch (e: Exception) {
-                // 换 token 失败（网络/授权码失效等）要显示出来，不能让协程异常顶穿崩溃
-                status = "登录失败：${e.message ?: "网络错误"}，请重试"
+                status = "登录超时或已取消，请重试"
+                return@LaunchedEffect
+            } finally {
+                serverJob.cancel()
             }
-        } catch (e: Exception) {
-            status = "登录超时或已取消，请重试"
-        } finally {
-            serverJob.cancel()
         }
     }
 }

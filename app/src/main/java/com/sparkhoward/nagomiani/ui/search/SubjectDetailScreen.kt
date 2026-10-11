@@ -60,6 +60,7 @@ import com.sparkhoward.nagomiani.ui.theme.NagomiBadge
 import com.sparkhoward.nagomiani.ui.theme.NagomiColors
 import com.sparkhoward.nagomiani.ui.theme.NagomiSecondaryButton
 import com.sparkhoward.nagomiani.ui.theme.NagomiSectionHeader
+import com.sparkhoward.nagomiani.ui.theme.NagomiSegmented
 
 /** 条目详情页：头部/评分/标签/infobox/简介 + 我的收藏 + 在线观看（跨片源） */
 @Composable
@@ -143,29 +144,47 @@ private fun DetailBody(state: SubjectDetailViewModel.State, viewModel: SubjectDe
             }
         }
 
-        // 我的收藏
-        state.myCollection?.let { myRaw ->
-            Column(Modifier.padding(16.dp)) {
-                NagomiSectionHeader("我的收藏", Icons.Filled.ExpandMore)
-                Row(Modifier.padding(top = 8.dp)) {
-                    CollectionType.entries.forEach { type ->
-                        val selected = myRaw == type.raw
-                        Text(
-                            type.label,
-                            color = if (selected) NagomiColors.accent else MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontWeight = if (selected) androidx.compose.ui.text.font.FontWeight.Bold else androidx.compose.ui.text.font.FontWeight.Normal,
-                            modifier = Modifier
-                                .clickable { viewModel.setCollection(type) }
-                                .padding(end = 14.dp),
-                        )
-                    }
-                    Text(
-                        "取消收藏",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.clickable { viewModel.removeCollection() },
-                    )
+        // 我的收藏（五态按钮常显：未收藏也可直接标记；选择即 POST 同步 Bangumi——
+        // 与追番页同款胶囊分段选择器风格；未登录只提示不同步）
+        Column(Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                NagomiSectionHeader("我的收藏", Icons.Filled.FavoriteBorder, Modifier.weight(1f))
+                if (state.collectionSaving) {
+                    CircularProgressIndicator(color = NagomiColors.accent, modifier = Modifier.padding(end = 8.dp).size(16.dp))
                 }
-                state.collectionMessage?.let { Text(it, fontSize = 12.sp, color = NagomiColors.watchedGreen) }
+            }
+            NagomiSegmented(
+                options = CollectionType.entries.toList(),
+                selected = state.myCollection?.let { CollectionType.fromRaw(it) },
+                label = { it?.label ?: "" },
+                onSelect = { type -> type?.let { viewModel.setCollection(it) } },
+                modifier = Modifier.padding(top = 8.dp),
+            )
+            state.collectionMessage?.let { msg ->
+                Text(
+                    msg,
+                    fontSize = 12.sp,
+                    color = if (msg.startsWith("收藏失败") || msg.startsWith("未登录")) MaterialTheme.colorScheme.error
+                    else NagomiColors.watchedGreen,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+            }
+            if (state.isLoggedIn) {
+                Text(
+                    "取消收藏",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier
+                        .clickable { viewModel.removeCollection() }
+                        .padding(top = 6.dp),
+                )
+            } else {
+                Text(
+                    "未登录 Bangumi：先到「追番」页登录，收藏状态才会同步",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
             }
         }
 

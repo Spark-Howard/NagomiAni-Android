@@ -9,6 +9,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.BufferedReader
 import java.io.IOException
@@ -74,6 +76,9 @@ class BangumiAuth(private val context: Context) {
             "&state=$state"
 
     companion object {
+        /** 刷新互斥锁（全局）：见 refreshIfNeeded 注释 */
+        private val refreshMutex = Mutex()
+
         /**
          * 从回调 URL 提取授权码（WebView 拦截路径：不让 WebView 真去请求本机回环地址）。
          * 校验 state 防 CSRF；非本机回调、带 error、state 不符均返回 null。
@@ -189,8 +194,11 @@ class BangumiAuth(private val context: Context) {
         return session
     }
 
-    /** 过期前 60s 内刷新（refresh_token 轮换：响应里的新 token 覆盖旧值） */
-    suspend fun refreshIfNeeded(): Session {
+    /** 过期前 60s 内刷新（refresh_token 轮换：响应里的新 token 覆盖旧值）。
+     *  刷新必须全局串行：tokenProvider 会被多个 API 实例并发调用，两个协程拿同一旧
+     *  refresh_token 去换，轮换后必有一方 401（bgm 的 refresh_token 一次性）；
+     *  BangumiAuth 按调用方各自实例化，锁必须放伴生对象才能覆盖全部实例 */
+    suspend fun refreshIfNeeded(): Session = refreshMutex.withLock {
         val current = session()
         if (!current.needsRefresh()) return current
         val refreshToken = current.refreshToken ?: return current

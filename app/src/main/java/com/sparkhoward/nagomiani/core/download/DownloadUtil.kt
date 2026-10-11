@@ -112,7 +112,8 @@ object DownloadUtil {
         }
     }
 
-    /** 启动时把下载索引载入内存（库已存在的记录） */
+    /** 启动时把下载索引载入内存（库已存在的记录）。必须 update 合并：监听器线程可能
+     *  在游标读取期间已写入更鲜活的状态，整体覆盖会把它冲掉 */
     private fun refreshStates(manager: DownloadManager) {
         kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
             val map = HashMap<String, ItemState>()
@@ -125,7 +126,7 @@ object DownloadUtil {
                     }
                 }
             }
-            states.value = map
+            states.update { it + map }
         }
     }
 
@@ -145,7 +146,7 @@ object DownloadUtil {
                 val meta = metaOf(d)
                 live[d.request.id] = ItemState(d.state, d.percentDownloaded, meta.title, meta.cover)
             }
-        }.onSuccess { if (live.isNotEmpty()) states.value = states.value + live }
+        }.onSuccess { if (live.isNotEmpty()) states.update { it + live } } // update：与监听器写线程互不覆盖
     }
 
     /** 有活动下载时每秒轮询一次实时进度（活动下载由状态回调驱动，轮询只补百分比细粒度变化） */

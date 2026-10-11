@@ -1,6 +1,9 @@
 package com.sparkhoward.nagomiani.player
 
 import android.app.Application
+import android.content.Context
+import android.view.ViewGroup
+import android.widget.FrameLayout
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.C
@@ -90,8 +93,12 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     val speed = MutableStateFlow(1.0f)
     val autoplayNext = MutableStateFlow(true)
 
-    /** 本番选集缓存（跨集复用，连播提示同源） */
-    private val episodeCache = HashMap<String, List<OnlineEpisode>>()
+    /** 本番选集缓存（跨集复用，连播提示同源）。LRU 封顶 4 部——长番一部上千集，
+     *  一晚连刷多部番时避免全量分集表无界堆积 */
+    private val episodeCache = object : LinkedHashMap<String, List<OnlineEpisode>>(8, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<OnlineEpisode>>): Boolean =
+            size > EPISODE_CACHE_MAX_SERIES
+    }
 
     private fun showOf(item: OnlinePlayback) = OnlineShow(
         providerID = item.seriesKey.removePrefix("online:").substringBefore(':'),
@@ -179,6 +186,20 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     var exoPlayer: ExoPlayer? by androidx.compose.runtime.mutableStateOf<ExoPlayer?>(null)
         private set
 
+    // 共享 PlayerView：播放器路由与悬浮小窗共用同一实例（切换容器时重挂载而非重建，不闪断）
+    private var sharedPlayerView: androidx.media3.ui.PlayerView? = null
+
+    /** 取共享 PlayerView（必要时创建）；调用方负责先从旧父容器移除再挂载 */
+    fun obtainPlayerView(context: Context): androidx.media3.ui.PlayerView =
+        sharedPlayerView ?: androidx.media3.ui.PlayerView(context).apply {
+            useController = false
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT,
+            )
+            player = exoPlayer
+            sharedPlayerView = this
+        }
+
     // 续播/落盘闸门（mac 版 pendingResumeTarget 同款：起播瞬间位置未达续播点不落盘）
     private var resumeTarget: Double? = null
     private var lastSaveAt = 0L
@@ -200,7 +221,17 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     val playerState = MutableStateFlow(PlayerState())
 
     fun start(item: OnlinePlayback, forceRestart: Boolean = false) {
-        if (!forceRestart && playback?.resumeKey == item.resumeKey && exoPlayer != null) return
+        val player = exoPlayer
+        val sameEpisode = !forceRestart && player != null && playback?.resumeKey == item.resumeKey
+        if (sameEpisode && (player!!.playbackState == Player.STATE_READY || player!!.playbackState == Player.STATE_BUFFERING)) {
+            // 同一集重进（返回重进 / 「回到播放中」/ 悬浮小窗展开）：直接续播。
+            // 必须自动续播——暂停态下 Surface 重挂载不出帧（黑屏），停留暂停观感即"卡死"
+            player!!.play()
+            startPeriodicTasks()
+            loadPanelIfNeeded()
+            return
+        }
+        // 首播 / 换集 / 被 stop 过（IDLE/ENDED）的同集重进：完整装配（含续播点决策）
         playback = item
         nextOfferTriggered = false
         // 重进/重播同一集允许重新判定看完同步（否则首播已入列的 key 会挡住后续所有同步）
@@ -209,7 +240,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         ui.value = UIState(title = item.displayTitle ?: "", isLoading = true)
 
         val context = getApplication<Application>()
-        val player = exoPlayer ?: ExoPlayer.Builder(context).build().also {
+        val p = player ?: ExoPlayer.Builder(context).build().also {
             exoPlayer = it
             it.addListener(playerListener)
         }
@@ -225,7 +256,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             val entry = store.resumeEntry(item.resumeKey)
             val resumeAt = entry?.takeIf { it.isResumable }?.position ?: 0.0
             resumeTarget = if (resumeAt > 0) resumeAt else null
-            openMedia(player, item.url, item, resumeAt)
+            openMedia(p, item.url, item, resumeAt)
             if (resumeAt > 0) {
                 ui.value = ui.value.copy(
                     statusMessage = "已从 ${formatTime(resumeAt)} 继续播放",
@@ -541,11 +572,14 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         periodicJob?.cancel()
         exoPlayer?.release()
         exoPlayer = null
+        sharedPlayerView = null
         PlaybackBus.isPlaying.value = false
         super.onCleared()
     }
 
     companion object {
+        private const val EPISODE_CACHE_MAX_SERIES = 4
+
         fun formatTime(seconds: Double): String {
             if (!seconds.isFinite() || seconds < 0) return "0:00"
             val total = seconds.toLong()

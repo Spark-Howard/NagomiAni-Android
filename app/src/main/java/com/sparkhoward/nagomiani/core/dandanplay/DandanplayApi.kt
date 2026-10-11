@@ -129,9 +129,10 @@ class DandanplayApi(
             .build()
     }
 
+    // 只用 contentOrNull：第二个分支永远取 JsonNull.content = 字面量 "null" 字符串，
+    // 显式 null 字段会变成弹幕文本/番名 "null"，污染标题相似度匹配
     private fun JsonObject.stringField(name: String): String? =
         runCatching { this[name]?.jsonPrimitive?.contentOrNull }.getOrNull()
-            ?: runCatching { this[name]?.jsonPrimitive?.content }.getOrNull()
 
     private fun JsonObject.longField(name: String): Long? =
         runCatching { this[name]?.jsonPrimitive?.long }.getOrNull()

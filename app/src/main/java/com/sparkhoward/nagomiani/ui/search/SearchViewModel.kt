@@ -36,6 +36,7 @@ class SearchViewModel(app: Application) : AndroidViewModel(app) {
 
     val state = MutableStateFlow(State())
     private var searchGeneration = 0
+    private var weeklyGeneration = 0
 
     init {
         loadWeekly()
@@ -67,10 +68,12 @@ class SearchViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 最近更新（过去一周，按天分组；今天在前）——/calendar 即"每周放送"，聚合规则同 mac 版 */
     fun loadWeekly() {
+        val generation = ++weeklyGeneration
         viewModelScope.launch {
             state.value = state.value.copy(weeklyLoading = true, weeklyError = null)
             try {
                 val days = api().calendar()
+                if (generation != weeklyGeneration) return@launch // 手动刷新已发出，过期响应不落地
                 val todayIndex = todayBangumiWeekday()
                 // 重排：今天 → 前 6 天（/calendar 的 id: 1=周一…7=周日）
                 val ordered = buildList {
@@ -85,15 +88,16 @@ class SearchViewModel(app: Application) : AndroidViewModel(app) {
                     weeklyFetchedAt = java.time.LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss")),
                 )
             } catch (e: Exception) {
+                if (generation != weeklyGeneration) return@launch
                 state.value = state.value.copy(weeklyLoading = false, weeklyError = "加载失败：${e.message}")
             }
         }
     }
 
     private fun todayBangumiWeekday(): Int {
-        // Gregorian: 1=周日…7=周六 → Bangumi: 1=周一…7=周日
-        val gregorian = LocalDate.now().dayOfWeek.value // 1=周一…7=周日
-        return gregorian
+        // Bangumi /calendar 以日本时区（JST）编排放送日；用设备本地日期会在
+        // JST 已跨天而本地未跨天的时段错位一天（如北京时间 23 点后）
+        return LocalDate.now(java.time.ZoneId.of("Asia/Tokyo")).dayOfWeek.value // 1=周一…7=周日
     }
 
     /** 我的收藏徽章（登录时给搜索结果加"想看/在看"角标）。列表端点按用户名寻址，先取 me() */

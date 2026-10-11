@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.sparkhoward.nagomiani.AppGraph
 import com.sparkhoward.nagomiani.core.bangumi.BangumiApi
 import com.sparkhoward.nagomiani.core.bangumi.BangumiAuth
+import com.sparkhoward.nagomiani.core.bangumi.BangumiError
 import com.sparkhoward.nagomiani.core.maccms.OnlineRepo
 import com.sparkhoward.nagomiani.core.online.WeeklyAggregator
 import com.sparkhoward.nagomiani.core.model.CollectionModifyPayload
@@ -35,6 +36,10 @@ class SubjectDetailViewModel(app: Application) : AndroidViewModel(app) {
         val error: String? = null,
         val myCollection: Int? = null,
         val collectionMessage: String? = null,
+        /** 收藏五态同步中（按钮区转圈） */
+        val collectionSaving: Boolean = false,
+        /** 是否已登录 Bangumi（决定收藏区是否提示同步不可用） */
+        val isLoggedIn: Boolean = false,
         val sourcesLoading: Boolean = false,
         val sourcesError: String? = null,
         /** 每站搜索结果概览（如「量子资源 2 · 极速资源 0 · 暴风资源 失败」） */
@@ -53,10 +58,31 @@ class SubjectDetailViewModel(app: Application) : AndroidViewModel(app) {
     /** 离线缓存状态（resumeKey → 状态/进度），详情页方框与缓存按钮共用 */
     val downloadStates = com.sparkhoward.nagomiani.core.download.DownloadUtil.states
     private var current: Subject? = null
+    /** 收藏修改世代：快速连点两个状态时，过期响应不得覆盖新选择 */
+    private var collectionGeneration = 0
 
     fun load(subjectID: Int) {
+        // 同条目重进（播放器/登录页返回）：不整页重置——State(loading=true) 会把已渲染的
+        // 条目/片源清空成转圈，还要重新跨站搜片；只静默刷新会话中会变化的动态数据
+        val sameSubject = current?.id == subjectID
+        if (!sameSubject) state.value = State(loading = true)
         viewModelScope.launch {
-            state.value = State(loading = true)
+            // 登录态决定收藏区提示（从登录页返回后要及时反映）
+            state.value = state.value.copy(isLoggedIn = auth.isLoggedIn())
+            if (sameSubject) {
+                loadBookmarked()
+                loadEpisodeMeta(subjectID)
+                // 收藏态也要刷新：播放器看完自动同步会补「在看」，静默重进不能让五态按钮停在旧状态
+                if (auth.isLoggedIn()) {
+                    runCatching {
+                        val authed = BangumiApi { auth.refreshIfNeeded().accessToken }
+                        authed.myCollectionOf(subjectID)?.let { c ->
+                            state.value = state.value.copy(myCollection = c.type.takeIf { t -> t > 0 })
+                        }
+                    }
+                }
+                return@launch
+            }
             try {
                 val authed = BangumiApi { auth.refreshIfNeeded().accessToken }
                 val subject = authed.subject(subjectID)
@@ -87,7 +113,9 @@ class SubjectDetailViewModel(app: Application) : AndroidViewModel(app) {
         try {
             val authed = BangumiApi { auth.refreshIfNeeded().accessToken }
             val eps = authed.allEpisodes(subjectID)
-            val unaired = WeeklyAggregator.unairedAirdates(eps, java.time.LocalDate.now())
+            // 放送日期以 JST 编排（与 Bangumi /calendar 一致），不能用设备本地"今天"判定，
+            // 否则 JST 已开播而本地未到（如东九区以西）会多锁一天，反之会提前解锁
+            val unaired = WeeklyAggregator.unairedAirdates(eps, java.time.LocalDate.now(java.time.ZoneId.of("Asia/Tokyo")))
             val watched = if (auth.isLoggedIn()) {
                 runCatching { authed.myEpisodeCollections(subjectID) }.getOrDefault(emptyList())
                     .filter { it.type == 2 }.mapNotNull { mark ->
@@ -185,6 +213,10 @@ class SubjectDetailViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { searchSources(title, useCache = false) }
     }
 
+    /** 该番在当前片源列表里的总集数（入库播种「已看基线」用：否则更新提醒/角标无从判新） */
+    private fun knownEpisodeCount(seriesKey: String): Int =
+        state.value.sources.firstOrNull { it.first.seriesKey == seriesKey }?.second?.size ?: 0
+
     /** 点播：自动加入云端番库（收藏）+ 绑定（保证看完同步可用），装配播放参数；
      *  取流成功后才回调 [onLaunched]（导航去播放器），失败在本页提示 */
     fun launchEpisode(show: OnlineShow, episode: OnlineEpisode, onLaunched: () -> Unit = {}) {
@@ -223,6 +255,7 @@ class SubjectDetailViewModel(app: Application) : AndroidViewModel(app) {
                     title = show.title,
                     subtitle = show.subtitle,
                     coverURL = show.coverURL,
+                    lastSeenEpisodeCount = knownEpisodeCount(show.seriesKey),
                 ),
             )
             state.value = state.value.copy(bookmarkedKeys = state.value.bookmarkedKeys + show.seriesKey)
@@ -247,6 +280,7 @@ class SubjectDetailViewModel(app: Application) : AndroidViewModel(app) {
                     title = show.title,
                     subtitle = show.subtitle,
                     coverURL = show.coverURL,
+                    lastSeenEpisodeCount = knownEpisodeCount(show.seriesKey),
                 ),
             )
             store.bind(show.seriesKey, subject.id, subject.displayName)
@@ -293,6 +327,21 @@ class SubjectDetailViewModel(app: Application) : AndroidViewModel(app) {
             util.addDownload(ep.resumeKey, url, show.title, show.coverURL)
             added++
         }
+        // 批量缓存视为「已知当前集数」：播种已看基线，让更新提醒从这一刻起判新
+        if (episodes.isNotEmpty()) {
+            viewModelScope.launch {
+                store.upsertCloudEntry(
+                    AppStore.CloudEntry(
+                        providerID = show.providerID,
+                        showID = show.showID,
+                        title = show.title,
+                        subtitle = show.subtitle,
+                        coverURL = show.coverURL,
+                        lastSeenEpisodeCount = episodes.size,
+                    ),
+                )
+            }
+        }
         when {
             added > 0 -> state.value = state.value.copy(
                 collectionMessage = "已加入 ${added} 集离线缓存" +
@@ -304,23 +353,46 @@ class SubjectDetailViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 修改我的收藏 */
+    /** 修改我的收藏（五态按钮）：POST /collections 为 upsert——未收藏条目直接创建；
+     *  未登录时不同步只提示（有绑定的条目看完同步由播放器离线队列兜底，这里不做本地伪装态） */
     fun setCollection(type: CollectionType) {
         val subject = current ?: return
+        if (state.value.myCollection == type.raw) return // 已是该状态：避免重复请求
+        val generation = ++collectionGeneration
         viewModelScope.launch {
+            if (!auth.isLoggedIn()) {
+                state.value = state.value.copy(collectionMessage = "未登录 Bangumi，无法同步收藏状态")
+                return@launch
+            }
+            state.value = state.value.copy(collectionSaving = true)
             try {
                 val authed = BangumiApi { auth.refreshIfNeeded().accessToken }
                 authed.updateCollection(subject.id, CollectionModifyPayload(type = type.raw))
-                state.value = state.value.copy(myCollection = type.raw, collectionMessage = "已标记「${type.label}」")
+                if (generation != collectionGeneration) return@launch
+                state.value = state.value.copy(
+                    collectionSaving = false,
+                    myCollection = type.raw,
+                    collectionMessage = "已标记「${type.label}」并同步到 Bangumi ✓",
+                )
             } catch (e: Exception) {
-                state.value = state.value.copy(collectionMessage = "收藏失败：${e.message}")
+                if (generation != collectionGeneration) return@launch
+                state.value = state.value.copy(
+                    collectionSaving = false,
+                    collectionMessage = "收藏失败：${BangumiError.describe(e)}",
+                )
             }
         }
     }
 
     fun removeCollection() {
-        // Bangumi v0 无取消条目收藏端点（/v0/users/-/collections/{subject_id} 只有 POST/PATCH，
-        // 且 type 合法值为 1–5，发送 0 必返回 400）——不发起注定失败的请求，如实提示
-        state.value = state.value.copy(collectionMessage = "Bangumi API 暂不支持取消条目收藏，可在网页端操作")
+        viewModelScope.launch {
+            if (!auth.isLoggedIn()) {
+                state.value = state.value.copy(collectionMessage = "未登录 Bangumi，无法同步收藏状态")
+                return@launch
+            }
+            // Bangumi v0 无取消条目收藏端点（/v0/users/-/collections/{subject_id} 只有 POST/PATCH，
+            // 且 type 合法值为 1–5，发送 0 必返回 400）——不发起注定失败的请求，如实提示
+            state.value = state.value.copy(collectionMessage = "Bangumi API 暂不支持取消条目收藏，可在网页端操作")
+        }
     }
 }

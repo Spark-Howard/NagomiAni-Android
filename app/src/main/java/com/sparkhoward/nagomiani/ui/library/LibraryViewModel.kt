@@ -55,11 +55,27 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
 
     val state = MutableStateFlow(State())
 
+    /** 番库有新集时发系统通知（每日后台检查，见 EpisodeNotify） */
+    val updateNotify = MutableStateFlow(true)
+
+    init {
+        viewModelScope.launch {
+            store.updateNotifyEnabled.collect { updateNotify.value = it }
+        }
+    }
+
+    fun toggleUpdateNotify() {
+        viewModelScope.launch { store.setUpdateNotifyEnabled(!updateNotify.value) }
+    }
+
     fun refresh() {
         viewModelScope.launch {
+            // loading 置位 + 分步发布：否则多秒刷新期间列表空白，还会误渲染"还没有云端番"空态
+            state.value = state.value.copy(loading = true)
             val items = buildContinueItems()
+            state.value = state.value.copy(continueItems = items, loading = false)
             val rows = buildCloudRows()
-            state.value = state.value.copy(continueItems = items, cloudRows = rows)
+            state.value = state.value.copy(cloudRows = rows)
         }
     }
 
@@ -123,12 +139,13 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
     /** 展开/收起云端番的分集（展开时刷新分集 + 更新已看基线 + 拉已看徽章） */
     fun toggleExpand(row: CloudRow) {
         viewModelScope.launch {
+            val key = row.entry.seriesKey
             val current = state.value
-            if (current.expandedSeriesKey == row.entry.seriesKey) {
+            if (current.expandedSeriesKey == key) {
                 state.value = current.copy(expandedSeriesKey = null, expandedEpisodes = emptyList())
                 return@launch
             }
-            state.value = current.copy(expandedSeriesKey = row.entry.seriesKey, expandedEpisodes = emptyList(), loading = true)
+            state.value = current.copy(expandedSeriesKey = key, expandedEpisodes = emptyList(), loading = true)
             val show = OnlineShow(row.entry.providerID, row.entry.showID, row.entry.title, row.entry.subtitle, row.entry.coverURL)
             val episodes = onlineRepo.episodes(show)
             // 刷新"已看基线"
@@ -144,11 +161,16 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
                     }.toSet()
                 }
             }
-            state.value = state.value.copy(
-                loading = false,
-                expandedEpisodes = episodes,
-                watchedNumbers = watched,
-            )
+            // 慢网络上快速点开另一部番（或收起）后，旧响应不能落地——否则 B 的标题下挂着 A 的分集，点播会串台
+            when (val expanded = state.value.expandedSeriesKey) {
+                key -> state.value = state.value.copy(
+                    loading = false,
+                    expandedEpisodes = episodes,
+                    watchedNumbers = watched,
+                )
+                null -> state.value = state.value.copy(loading = false) // 已收起：只复位转圈
+                else -> Unit // 已切换到另一部番：由那次的请求负责收尾
+            }
         }
     }
 

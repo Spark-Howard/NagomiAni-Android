@@ -12,3 +12,5 @@ signing.private
 *.jks
 *.keystore
 app/src/main/assets/danmaku-credentials.bin
+signing.private
+nagomiani-release.keystore

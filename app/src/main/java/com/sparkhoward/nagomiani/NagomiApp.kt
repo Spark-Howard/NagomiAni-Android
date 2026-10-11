@@ -35,6 +35,7 @@ class NagomiApp : Application(), ImageLoaderFactory {
         AppGraph.init(this)
         applyNetworkSettings()
         createDownloadChannel()
+        createUpdateNotifyChannel()
     }
 
     /** 离线缓存下载服务的前台通知渠道 */
@@ -43,6 +44,16 @@ class NagomiApp : Application(), ImageLoaderFactory {
             com.sparkhoward.nagomiani.player.NagomiDownloadService.CHANNEL_ID,
             "离线缓存",
             android.app.NotificationManager.IMPORTANCE_LOW,
+        )
+        getSystemService(android.app.NotificationManager::class.java).createNotificationChannel(channel)
+    }
+
+    /** 追番更新提醒的通知渠道（有声音、不弹横幅） */
+    private fun createUpdateNotifyChannel() {
+        val channel = android.app.NotificationChannel(
+            com.sparkhoward.nagomiani.core.notify.EpisodeNotify.CHANNEL_ID,
+            "追番更新",
+            android.app.NotificationManager.IMPORTANCE_DEFAULT,
         )
         getSystemService(android.app.NotificationManager::class.java).createNotificationChannel(channel)
     }

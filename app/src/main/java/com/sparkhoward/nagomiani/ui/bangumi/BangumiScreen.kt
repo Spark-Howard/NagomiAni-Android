@@ -34,6 +34,8 @@ class BangumiViewModel(app: Application) : AndroidViewModel(app) {
     )
 
     val state = MutableStateFlow(State())
+    /** 收藏列表请求世代：慢网络上快速切分类时，过期响应不得覆盖新分类的列表 */
+    private var collectionsGeneration = 0
 
     /** 应用内代理（输入草稿 + 保存结果提示） */
     val proxyDraft = MutableStateFlow("")
@@ -99,13 +101,16 @@ class BangumiViewModel(app: Application) : AndroidViewModel(app) {
     private fun loadCollections() {
         val username = currentUsername ?: return // 未取到用户名前无法调列表端点
         val type = state.value.selected
+        val generation = ++collectionsGeneration
         viewModelScope.launch {
             state.value = state.value.copy(collectionsLoading = true)
             try {
                 val api = BangumiApi { auth.refreshIfNeeded().accessToken }
                 val page = api.myCollections(username, type, limit = 100)
+                if (generation != collectionsGeneration) return@launch
                 state.value = state.value.copy(collectionsLoading = false, collections = page.data)
             } catch (e: Exception) {
+                if (generation != collectionsGeneration) return@launch
                 state.value = state.value.copy(collectionsLoading = false, error = "收藏加载失败：${e.message}")
             }
         }

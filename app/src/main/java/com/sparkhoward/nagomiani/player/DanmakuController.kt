@@ -10,7 +10,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 
 /**
  * 弹幕控制器：按「番名+集号」匹配 dandanplay 并拉取弹幕（与 mac 版同语义：宁缺毋滥）。
- * 内存缓存按 resumeKey（换集回来不重复请求）；换集先清旧弹幕，加载失败不残留。
+ * 内存缓存按 resumeKey（换集回来不重复请求），LRU 封顶 4 集——每集可达数千条弹幕，
+ * 连看一季时只保留最近几集，避免无界增长；换集先清旧弹幕，加载失败不残留。
  */
 class DanmakuController(private val api: DandanplayApi) {
 
@@ -23,7 +24,10 @@ class DanmakuController(private val api: DandanplayApi) {
     )
 
     val state = MutableStateFlow(State())
-    private val cache = HashMap<String, List<DanmakuComment>>()
+    private val cache = object : LinkedHashMap<String, List<DanmakuComment>>(8, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<DanmakuComment>>): Boolean =
+            size > CACHE_MAX_EPISODES
+    }
     private var currentKey: String? = null
     private var loadJob: Job? = null
 
@@ -50,7 +54,6 @@ class DanmakuController(private val api: DandanplayApi) {
             val comments = api.comments(episodeId)
             if (currentKey != resumeKey) return@launch
             cache[resumeKey] = comments
-            if (cache.size > 10) cache.remove(cache.keys.first())
             state.value = State(Phase.LOADED, comments = comments, statusText = "已加载 ${comments.size} 条弹幕")
         }
     }
@@ -65,6 +68,10 @@ class DanmakuController(private val api: DandanplayApi) {
     fun clear() {
         currentKey = null
         state.value = State()
+    }
+
+    private companion object {
+        const val CACHE_MAX_EPISODES = 4
     }
 }
 

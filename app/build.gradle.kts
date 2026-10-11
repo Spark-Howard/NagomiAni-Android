@@ -15,8 +15,8 @@ android {
         applicationId = "com.sparkhoward.nagomiani"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.1.1"
+        versionCode = 3
+        versionName = "0.2.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -72,6 +72,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true // Http.kt 按 DEBUG 门控请求日志（release 不落 logcat）
     }
     packaging {
         resources {
@@ -103,6 +104,7 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.androidx.datastore.preferences)
+    implementation(libs.androidx.work.runtime) // 追番更新提醒的后台定时检查
     implementation(libs.coil.compose)
     testImplementation(libs.junit)
     testImplementation(libs.kotlin.test)

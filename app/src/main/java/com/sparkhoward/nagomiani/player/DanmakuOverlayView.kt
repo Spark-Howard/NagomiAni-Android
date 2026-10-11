@@ -38,9 +38,15 @@ class DanmakuOverlayView(context: Context) : View(context) {
         color = Color.argb(160, 0, 0, 0)
     }
 
-    /** 每条弹幕的绘制缓存（paint 状态 + 宽度），换设置/换内容时失效 */
+    /** 每条弹幕的绘制缓存（paint 状态 + 宽度），换设置/换内容时失效。
+     *  LRU 封顶：一整集弹幕全部过屏会积累 ~3k×2 个 Paint（含 native 对象、数 MB），
+     *  封顶后只在同屏/时间邻近的弹幕间复用，内存有界且不增加逐帧重建成本 */
     private data class DrawState(val textPaint: Paint, val strokePaint: Paint, val width: Float)
-    private var drawCache: MutableMap<DanmakuComment, DrawState> = HashMap()
+    private var drawCache: MutableMap<DanmakuComment, DrawState> =
+        object : LinkedHashMap<DanmakuComment, DrawState>(64, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<DanmakuComment, DrawState>): Boolean =
+                size > DRAW_CACHE_MAX
+        }
 
     private var choreographer: Choreographer? = null
     private var running = false
@@ -67,6 +73,7 @@ class DanmakuOverlayView(context: Context) : View(context) {
     fun setComments(items: List<DanmakuComment>) {
         if (items === comments) return // PlayerScreen 每次重组都会调用，未变化时不重建车道
         comments = items
+        drawCache.clear() // 换集/换弹幕源：旧弹幕的画笔缓存整体作废（量大且永不再复用）
         rebuild()
     }
 
@@ -201,5 +208,9 @@ class DanmakuOverlayView(context: Context) : View(context) {
     override fun onDetachedFromWindow() {
         super.onDetachedFromWindow()
         stop()
+    }
+
+    private companion object {
+        const val DRAW_CACHE_MAX = 256
     }
 }

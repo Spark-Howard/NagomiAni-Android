@@ -44,6 +44,8 @@ class AppStore(private val context: Context) {
         val knownShows = stringPreferencesKey("online.known.shows.json")
         val pendingMarks = stringPreferencesKey("bangumi.pendingWatchedMarks.json")
         val resume = stringPreferencesKey("player.resume.json")               // {resumeKey: ResumeEntry}
+        val updateNotify = booleanPreferencesKey("notify.episodeUpdates")
+        val lastNotified = stringPreferencesKey("notify.episode.lastNotified.json") // {seriesKey: 已通知时的总集数}
     }
 
     // MARK: - 播放器设置
@@ -222,6 +224,27 @@ class AppStore(private val context: Context) {
     }
 
     suspend fun replacePendingMarks(list: List<PendingMark>) = edit { it[Keys.pendingMarks] = json.encodeToString(list) }
+
+    // MARK: - 追番更新提醒
+
+    /** 番库有新集时发系统通知 */
+    val updateNotifyEnabled: Flow<Boolean> = context.dataStore.data.map { it[Keys.updateNotify] ?: true }
+    suspend fun setUpdateNotifyEnabled(value: Boolean) = edit { it[Keys.updateNotify] = value }
+
+    /** 已通知基线（seriesKey → 通知时的总集数）：与「已看基线」（lastSeenEpisodeCount）独立——
+     *  同一批新集只提醒一次；用户在番库展开才推进已看基线，通知不推进它 */
+    val lastNotifiedCounts: Flow<Map<String, Int>> = context.dataStore.data.map { prefs ->
+        prefs[Keys.lastNotified]?.let { runCatching { json.decodeFromString<Map<String, Int>>(it) }.getOrNull() } ?: emptyMap()
+    }
+
+    suspend fun lastNotifiedCountsOnce(): Map<String, Int> = lastNotifiedCounts.first()
+
+    suspend fun recordNotifiedCounts(counts: Map<String, Int>) = edit { prefs ->
+        if (counts.isEmpty()) return@edit
+        val merged = HashMap(prefs[Keys.lastNotified]?.let { runCatching { json.decodeFromString<Map<String, Int>>(it) }.getOrNull() } ?: emptyMap())
+        merged.putAll(counts)
+        prefs[Keys.lastNotified] = json.encodeToString(merged)
+    }
 
     // MARK: - 私有工具
 

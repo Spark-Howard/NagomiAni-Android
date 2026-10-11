@@ -112,12 +112,17 @@ object Http {
         .readTimeout(30, TimeUnit.SECONDS)
         .callTimeout(60, TimeUnit.SECONDS)
         .followRedirects(true)
+        // 请求日志仅 debug 构建开启：release 落 logcat 会把搜索词/浏览过的片源站暴露给
+        // 任何有 READ_LOGS 的进程（BASIC 级不含 header/token，但 URL 里的查询参数全在）
         .addInterceptor(okhttp3.logging.HttpLoggingInterceptor { msg ->
             try {
                 android.util.Log.d("NagomiHttp", msg)
             } catch (_: Throwable) {
                 println(msg) // JVM 单元测试环境无 android.util.Log
             }
-        }.setLevel(okhttp3.logging.HttpLoggingInterceptor.Level.BASIC))
+        }.setLevel(
+            if (com.sparkhoward.nagomiani.BuildConfig.DEBUG) okhttp3.logging.HttpLoggingInterceptor.Level.BASIC
+            else okhttp3.logging.HttpLoggingInterceptor.Level.NONE,
+        ))
         .build()
 }

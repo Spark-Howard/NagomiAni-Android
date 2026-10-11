@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -24,6 +25,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.NotificationsNone
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Tv
@@ -33,6 +35,8 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -65,6 +69,7 @@ fun LibraryScreen(
     viewModel: LibraryViewModel = viewModel(),
 ) {
     val state by viewModel.state.collectAsState()
+    val updateNotify by viewModel.updateNotify.collectAsState()
 
     // 取消收藏确认弹窗（移除云端条目时会一并清除该番续播记录，需二次确认）
     var confirmRemove by remember { mutableStateOf<LibraryViewModel.CloudRow?>(null) }
@@ -76,6 +81,32 @@ fun LibraryScreen(
         item {
             Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("番库", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+            }
+        }
+
+        // 更新提醒开关：每日后台比对云端番库片源集数，有新集发系统通知（点按回本页）
+        item {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    Icons.Filled.NotificationsNone,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(16.dp),
+                )
+                Text(
+                    "番库有新集时通知我",
+                    fontSize = 13.sp,
+                    modifier = Modifier.padding(start = 6.dp).weight(1f),
+                )
+                Switch(
+                    checked = updateNotify,
+                    onCheckedChange = { viewModel.toggleUpdateNotify() },
+                    colors = SwitchDefaults.colors(checkedTrackColor = NagomiColors.accent),
+                    modifier = Modifier.height(26.dp),
+                )
             }
         }
 
@@ -104,7 +135,9 @@ fun LibraryScreen(
         if (state.cloudRows.isEmpty()) {
             item {
                 Text(
-                    "还没有云端番。在「搜索」打开条目 → 在线观看 → 收藏片源即可加入。",
+                    // 刷新中不能渲染"还没有云端番"空态（首次进入要等全部网络请求完成，会误导数秒）
+                    if (state.loading) "正在加载云端番库…"
+                    else "还没有云端番。在「搜索」打开条目 → 在线观看 → 收藏片源即可加入。",
                     fontSize = 13.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(16.dp),

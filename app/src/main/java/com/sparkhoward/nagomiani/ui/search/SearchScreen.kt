@@ -187,11 +187,17 @@ private fun SubjectCard(subject: Subject, onOpenDetail: (Int) -> Unit) {
         Text(
             subject.displayName,
             fontSize = 12.sp,
+            // 固定占两行：短标题与长标题的卡片等高，横向拖动时行高不跳变（周历抖动根因）
+            minLines = 2,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(top = 4.dp),
         )
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            // 固定评分行高度：无评分/集数的条目同样占位，保证整卡等高
+            modifier = Modifier.height(16.dp),
+        ) {
             subject.rating?.takeIf { it.score > 0 }?.let {
                 Text("★ ${"%.1f".format(it.score)}", fontSize = 11.sp, color = NagomiColors.accent)
             }

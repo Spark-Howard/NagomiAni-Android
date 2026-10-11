@@ -9,6 +9,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -179,21 +180,27 @@ class MacCMSApi(private val siteURL: String) {
         // 每组只解析一次（长番上千集时这是 O(组数×长度)；逐集重复解析是 O(n²)，会冻死主线程）
         val parsedGroups = groups.map { parseGroup(it) }
         val episodes = parsedGroups.getOrElse(preferredIndex) { emptyList() }
+        // 第一遍：集名可解析的取解析号；解析号重复（PV/预告抢了正片号）视为未解析进第二遍。
+        // 否则 streamURL 的 firstOrNull{number==} 会命中前面那集（正片播成 PV），resumeKey 也随之串台
         val usedNumbers = HashSet<Int>()
+        val parsedNumbers = episodes.map { raw ->
+            MediaMatching.episodeNumber(raw.name)?.takeIf { usedNumbers.add(it) }
+        }
         var fallback = 1
         fun nextFallback(): Int {
             while (usedNumbers.contains(fallback)) fallback++
-            return fallback++
+            val n = fallback++
+            usedNumbers.add(n)
+            return n
         }
         return episodes.mapIndexed { index, raw ->
-            // 集号优先从集名解析（OVA/PV 混排时按序递增兜底，跳过已用号）
-            val parsed = MediaMatching.episodeNumber(raw.name) ?: nextFallback()
-            usedNumbers += parsed
+            // 集号优先从集名解析（OVA/PV 混排时按序递增兜底，跳过全部已用号）
+            val number = parsedNumbers[index] ?: nextFallback()
             val routes = parsedGroups.mapNotNull { g -> g.getOrNull(index)?.url }.distinct()
             OnlineEpisode(
                 providerID = show.providerID,
                 showID = show.showID,
-                number = parsed,
+                number = number,
                 title = raw.name,
                 streamHint = raw.url,
                 routes = routes.ifEmpty { listOf(raw.url) },
@@ -220,6 +227,7 @@ class MacCMSApi(private val siteURL: String) {
         }.getOrNull()
     }
 
+    // contentOrNull：JSON 显式 null 不能落成字面量 "null" 字符串（会被当成正常标题/ID）
     private fun JsonObject.stringField(name: String): String? =
-        runCatching { this[name]?.jsonPrimitive?.content }.getOrNull()
+        runCatching { this[name]?.jsonPrimitive?.contentOrNull }.getOrNull()
 }

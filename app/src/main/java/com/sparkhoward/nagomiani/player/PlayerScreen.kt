@@ -8,7 +8,6 @@ import android.provider.Settings
 import android.view.ViewGroup
 import android.view.Window
 import android.view.WindowManager
-import android.widget.FrameLayout
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
@@ -47,6 +46,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PictureInPicture
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.CircularProgressIndicator
@@ -78,8 +78,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.lifecycle.ViewModelStoreOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.media3.ui.PlayerView
 import com.sparkhoward.nagomiani.ui.theme.NagomiColors
 import com.sparkhoward.nagomiani.ui.theme.NagomiSecondaryButton
 import kotlinx.coroutines.delay
@@ -88,27 +88,50 @@ import kotlin.math.roundToInt
 
 /**
  * 播放器页（黑底影院）：
- * 画面(media3 PlayerView) → 弹幕覆盖层 → 手势层（点击暂停/呼出控制条）→ 控制条/状态条。
+ * 画面(media3 PlayerView) → 弹幕覆盖层 → 手势层 → 控制条/状态条。
  * 竖屏进场：顶部 16:9 视频区 + 下方功能面板（上一集/下一集、倍速、线路、连播、缓存本集、选集）；
  * 点全屏按钮切横屏沉浸（隐藏状态栏/导航栏，刘海全贴边），再点或系统返回退回竖屏；离开页面一律恢复。
+ * 播放手势竖屏/全屏一致（作用于视频区）：单击控制条、双击播放/暂停、横拖滑进度、
+ * 长按 3× 快进、右/左半侧上下滑调音量/亮度。
+ * 悬浮小窗（唯一迷你形态）：控制条按钮退出本页、视频在页面角落继续播
+ * （拖动移位/双指缩放，见 MiniPlayerOverlay）；回桌面时自动切系统画中画保留到桌面（见 MainActivity）。
+ * VM 按 Activity 作用域：路由退出/进小窗后播放会话与共享 PlayerView 都存活。
  * 控制条 3s 自动隐藏（紧凑双行）；离开页面自动暂停（与 mac 版切页暂停一致）。
  */
 @Composable
-fun PlayerScreen(onClose: () -> Unit, viewModel: PlayerViewModel = viewModel()) {
+fun PlayerScreen(
+    onClose: () -> Unit,
+    onMinimize: () -> Unit,
+    viewModel: PlayerViewModel = viewModel(
+        viewModelStoreOwner = androidx.compose.ui.platform.LocalContext.current as ViewModelStoreOwner,
+    ),
+) {
     // 响应式观察 pending：点播装配完成（或"回到播放中"）时自动开演
     val pending by PlaybackBus.pending.collectAsState()
     LaunchedEffect(pending?.resumeKey) { pending?.let { viewModel.start(it) } }
     DisposableEffect(Unit) {
+        // 从悬浮小窗展开回本页：结束小窗态（共享 PlayerView 重挂载回这里）。
+        // 并清画中画残留：小窗里划掉 × 会销毁 Activity，系统不保证回调 mode-changed，
+        // 单例里的 inPip 若残留 true，下次进播放页会误以画中画布局渲染（无控制条、无手势）
+        PlaybackBus.miniActive.value = false
+        PlaybackBus.inPip.value = false
         onDispose {
-            // 返回即关闭：清除播放会话，"正在播放"入口条同帧消失（不再滞留）
-            PlaybackBus.pending.value = null
-            PlaybackBus.isPlaying.value = false
-            viewModel.releaseIfIdle()
+            // 返回不销毁播放会话：pending 保留最后一次播放参数（PlaybackBus 契约），
+            // 底部导航各页由此显示「回到播放中」入口条；重进按 resumeKey 去重/续播。
+            // 进悬浮小窗时不暂停（视频在小窗里继续放）
+            if (!PlaybackBus.miniActive.value) {
+                PlaybackBus.isPlaying.value = false
+                viewModel.releaseIfIdle()
+            }
         }
     }
 
     val activity = androidx.compose.ui.platform.LocalContext.current as? android.app.Activity
     var isFullscreen by remember { mutableStateOf(false) }
+
+    // 系统画中画中：按沉浸布局渲染（视频铺满、控制条隐藏、单击切播放/暂停、拖动手势停用）
+    val inPip by PlaybackBus.inPip.collectAsState()
+    val immersive = isFullscreen || inPip
     // 进页面时的系统状态快照，任何时刻离开（含全屏中系统返回）都还原
     val originalOrientation = remember { activity?.requestedOrientation ?: ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED }
     val originalCutoutMode = remember {
@@ -157,8 +180,8 @@ fun PlayerScreen(onClose: () -> Unit, viewModel: PlayerViewModel = viewModel()) 
         }
     }
 
-    // 全屏时系统返回先退全屏，而不是直接退出播放器
-    BackHandler(enabled = isFullscreen) { isFullscreen = false }
+    // 全屏时系统返回先退全屏，而不是直接退出播放器（画中画中的返回交给系统处理）
+    BackHandler(enabled = isFullscreen && !inPip) { isFullscreen = false }
 
     val ui by viewModel.ui.collectAsState()
     val state by viewModel.playerState.collectAsState()
@@ -173,7 +196,7 @@ fun PlayerScreen(onClose: () -> Unit, viewModel: PlayerViewModel = viewModel()) 
     var seekPreview by remember { mutableStateOf(0.0) }
     var showDanmakuSheet by remember { mutableStateOf(false) }
 
-    // 全屏手势：进度/音量/亮度 HUD 与长按倍速状态
+    // 播放手势：进度/音量/亮度 HUD 与长按倍速状态
     var seekHud by remember { mutableStateOf<SeekHud?>(null) }
     var volumeHud by remember { mutableStateOf<Float?>(null) }
     var brightnessHud by remember { mutableStateOf<Float?>(null) }
@@ -204,23 +227,20 @@ fun PlayerScreen(onClose: () -> Unit, viewModel: PlayerViewModel = viewModel()) 
         Column(
             Modifier
                 .fillMaxSize()
-                .background(if (isFullscreen) Color.Black else MaterialTheme.colorScheme.background)
+                .background(if (immersive) Color.Black else MaterialTheme.colorScheme.background)
         ) {
-            // 视频区：全屏占满整屏（横屏沉浸）；竖屏为顶部 16:9
+            // 视频区：全屏沉浸与画中画占满；竖屏为顶部 16:9
             Box(
                 Modifier.then(
-                    if (isFullscreen) Modifier.fillMaxSize()
+                    if (immersive) Modifier.fillMaxSize()
                     else Modifier.fillMaxWidth().aspectRatio(16f / 9f)
                 ),
             ) {
-            // 视频画面
+            // 视频画面：与悬浮小窗共用同一 PlayerView 实例（换容器重挂载，不重建）
             AndroidView(
                 factory = { context ->
-                    PlayerView(context).apply {
-                        useController = false
-                        layoutParams = FrameLayout.LayoutParams(
-                            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT,
-                        )
+                    viewModel.obtainPlayerView(context).also { view ->
+                        (view.parent as? ViewGroup)?.removeView(view)
                     }
                 },
                 update = { it.player = viewModel.exoPlayer },
@@ -243,123 +263,125 @@ fun PlayerScreen(onClose: () -> Unit, viewModel: PlayerViewModel = viewModel()) 
                 )
             }
 
-            // 手势层：竖屏 = 点击切控制条；全屏 = 单击切控制条 + 双击播放/暂停 + 横拖滑进度 +
+            // 手势层（竖屏/全屏一致，作用于视频区）：单击切控制条 + 双击播放/暂停 + 横拖滑进度 +
             // 长按 3× 快进 + 右半侧上下滑调音量 / 左半侧上下滑调亮度
-            val gestureInteraction = remember { MutableInteractionSource() }
             Box(
                 Modifier
                     .fillMaxSize()
-                    .then(
-                        if (isFullscreen) Modifier
-                            .pointerInput(Unit) {
-                                detectTapGestures(
-                                    onTap = { controlsVisible = !controlsVisible },
-                                    onDoubleTap = { viewModel.togglePlayPause() },
-                                    onLongPress = {
-                                        if (state.isPlaying && !boosting) {
-                                            boostBaseSpeed = viewModel.speed.value
-                                            boosting = true
-                                            viewModel.setSpeed(3f)
-                                        }
-                                    },
-                                    onPress = {
-                                        tryAwaitRelease()
-                                        // 长按快进在抬手时还原用户倍速（快进中离开页面由 dispose 兜底）
-                                        if (boosting) {
-                                            boosting = false
-                                            viewModel.setSpeed(boostBaseSpeed)
-                                        }
-                                    },
-                                )
+                    .pointerInput(Unit) {
+                        detectTapGestures(
+                            // 画中画内单击直接切播放/暂停（没有控制条可呼出）
+                            onTap = { if (inPip) viewModel.togglePlayPause() else controlsVisible = !controlsVisible },
+                            onDoubleTap = { viewModel.togglePlayPause() },
+                            onLongPress = {
+                                if (!inPip && state.isPlaying && !boosting) {
+                                    boostBaseSpeed = viewModel.speed.value
+                                    boosting = true
+                                    viewModel.setSpeed(3f)
+                                }
+                            },
+                            onPress = {
+                                tryAwaitRelease()
+                                // 长按快进在抬手时还原用户倍速（快进中离开页面由 dispose 兜底）
+                                if (boosting) {
+                                    boosting = false
+                                    viewModel.setSpeed(boostBaseSpeed)
+                                }
+                            },
+                        )
+                    }
+                    .pointerInput(Unit) {
+                        val touchSlop = viewConfiguration.touchSlop
+                        awaitEachGesture {
+                            val down = awaitFirstDown(requireUnconsumed = false)
+                            if (inPip) {
+                                // 画中画尺寸太小，不启用拖动（进度/音量/亮度 HUD 放不下）；等所有指针抬起
+                                while (true) {
+                                    val ev = awaitPointerEvent()
+                                    if (ev.changes.none { it.pressed }) break
+                                }
+                                return@awaitEachGesture
                             }
-                            .pointerInput(Unit) {
-                                val touchSlop = viewConfiguration.touchSlop
-                                val boxSize = size
-                                awaitEachGesture {
-                                    val down = awaitFirstDown(requireUnconsumed = false)
-                                    var mode = 0 // 0 待定 / 1 进度 / 2 音量 / 3 亮度
-                                    var totalX = 0f
-                                    var totalY = 0f
-                                    var seekStart = 0.0
-                                    var volumeStart = 0
-                                    var volumeMax = 1
-                                    var brightnessStart = 0.5f
-                                    while (true) {
-                                        val event = awaitPointerEvent()
-                                        val change = event.changes.firstOrNull { it.pressed } ?: break
-                                        val delta = change.positionChange()
-                                        totalX += delta.x
-                                        totalY += delta.y
-                                        if (mode == 0) {
-                                            val absX = abs(totalX)
-                                            val absY = abs(totalY)
-                                            if (absX > touchSlop || absY > touchSlop) {
-                                                mode = when {
-                                                    absX > absY && state.durationSeconds >= 1.0 -> 1
-                                                    absY > absX && down.position.x >= boxSize.width / 2f && audioManager != null -> 2
-                                                    absY > absX && activity?.window != null -> 3
-                                                    else -> 0 // 横拖但时长未知：不进入任何模式
-                                                }
-                                                when (mode) {
-                                                    1 -> {
-                                                        seekStart = if (isSeeking) seekPreview else state.positionSeconds
-                                                        isSeeking = true
-                                                        controlsVisible = false
-                                                    }
-                                                    2 -> {
-                                                        volumeMax = audioManager!!.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-                                                        volumeStart = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
-                                                    }
-                                                    3 -> brightnessStart = currentBrightness(activity?.window)
-                                                }
+                            // 竖屏/全屏切换不会重启 pointerInput(Unit)，尺寸必须每次手势实时读取
+                            val boxSize = size
+                            var mode = 0 // 0 待定 / 1 进度 / 2 音量 / 3 亮度
+                            var totalX = 0f
+                            var totalY = 0f
+                            var seekStart = 0.0
+                            var volumeStart = 0
+                            var volumeMax = 1
+                            var brightnessStart = 0.5f
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                val change = event.changes.firstOrNull { it.pressed } ?: break
+                                val delta = change.positionChange()
+                                totalX += delta.x
+                                totalY += delta.y
+                                if (mode == 0) {
+                                    val absX = abs(totalX)
+                                    val absY = abs(totalY)
+                                    if (absX > touchSlop || absY > touchSlop) {
+                                        mode = when {
+                                            absX > absY && state.durationSeconds >= 1.0 -> 1
+                                            absY > absX && down.position.x >= boxSize.width / 2f && audioManager != null -> 2
+                                            absY > absX && activity?.window != null -> 3
+                                            else -> 0 // 横拖但时长未知：不进入任何模式
+                                        }
+                                        when (mode) {
+                                            1 -> {
+                                                seekStart = if (isSeeking) seekPreview else state.positionSeconds
+                                                isSeeking = true
+                                                controlsVisible = false
                                             }
-                                        }
-                                        if (mode != 0) {
-                                            when (mode) {
-                                                1 -> {
-                                                    val duration = state.durationSeconds
-                                                    val target = (seekStart + totalX / boxSize.width * duration)
-                                                        .coerceIn(0.0, duration)
-                                                    seekPreview = target
-                                                    seekHud = SeekHud(target - seekStart, target)
-                                                }
-                                                2 -> {
-                                                    val target = volumeStart + (-totalY / boxSize.height * volumeMax).roundToInt()
-                                                        .coerceIn(0, volumeMax)
-                                                    audioManager!!.setStreamVolume(AudioManager.STREAM_MUSIC, target, 0)
-                                                    volumeHud = if (volumeMax > 0) target / volumeMax.toFloat() else 0f
-                                                }
-                                                else -> {
-                                                    val target = (brightnessStart - totalY / boxSize.height)
-                                                        .coerceIn(0.01f, 1f)
-                                                    activity?.window?.attributes = activity?.window?.attributes
-                                                        ?.also { it.screenBrightness = target }
-                                                    brightnessHud = target
-                                                }
+                                            2 -> {
+                                                volumeMax = audioManager!!.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+                                                volumeStart = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
                                             }
-                                            change.consume()
+                                            3 -> brightnessStart = currentBrightness(activity?.window)
                                         }
-                                    }
-                                    // 抬手/取消：进度应用、收起 HUD
-                                    when (mode) {
-                                        1 -> {
-                                            viewModel.seekTo(seekPreview)
-                                            isSeeking = false
-                                            seekHud = null
-                                        }
-                                        2 -> volumeHud = null
-                                        3 -> brightnessHud = null
                                     }
                                 }
+                                if (mode != 0) {
+                                    when (mode) {
+                                        1 -> {
+                                            val duration = state.durationSeconds
+                                            val target = (seekStart + totalX / boxSize.width * duration)
+                                                .coerceIn(0.0, duration)
+                                            seekPreview = target
+                                            seekHud = SeekHud(target - seekStart, target)
+                                        }
+                                        2 -> {
+                                            val target = volumeStart + (-totalY / boxSize.height * volumeMax).roundToInt()
+                                                .coerceIn(0, volumeMax)
+                                            audioManager!!.setStreamVolume(AudioManager.STREAM_MUSIC, target, 0)
+                                            volumeHud = if (volumeMax > 0) target / volumeMax.toFloat() else 0f
+                                        }
+                                        else -> {
+                                            val target = (brightnessStart - totalY / boxSize.height)
+                                                .coerceIn(0.01f, 1f)
+                                            activity?.window?.attributes = activity?.window?.attributes
+                                                ?.also { it.screenBrightness = target }
+                                            brightnessHud = target
+                                        }
+                                    }
+                                    change.consume()
+                                }
                             }
-                        else Modifier.clickable(
-                            interactionSource = gestureInteraction,
-                            indication = null,
-                        ) { controlsVisible = !controlsVisible }
-                    ),
+                            // 抬手/取消：进度应用、收起 HUD
+                            when (mode) {
+                                1 -> {
+                                    viewModel.seekTo(seekPreview)
+                                    isSeeking = false
+                                    seekHud = null
+                                }
+                                2 -> volumeHud = null
+                                3 -> brightnessHud = null
+                            }
+                        }
+                    },
             )
 
-            // 全屏手势 HUD：进度预览（中央）
+            // 手势 HUD：进度预览（中央）
             seekHud?.let { hud ->
                 Row(
                     Modifier
@@ -382,7 +404,7 @@ fun PlayerScreen(onClose: () -> Unit, viewModel: PlayerViewModel = viewModel()) 
                 }
             }
 
-            // 全屏手势 HUD：长按 3× 快进（中央偏上）
+            // 手势 HUD：长按 3× 快进（中央偏上；竖屏视频区矮，偏移收小避免出画）
             if (boosting) {
                 Text(
                     "3× 快进中 ▶▶▶",
@@ -390,19 +412,20 @@ fun PlayerScreen(onClose: () -> Unit, viewModel: PlayerViewModel = viewModel()) 
                     fontSize = 14.sp,
                     modifier = Modifier
                         .align(Alignment.Center)
-                        .padding(bottom = 110.dp)
+                        .padding(bottom = if (isFullscreen) 110.dp else 80.dp)
                         .background(Color.Black.copy(alpha = 0.65f), RoundedCornerShape(999.dp))
                         .padding(horizontal = 14.dp, vertical = 8.dp),
                 )
             }
 
-            // 全屏手势 HUD：音量（右侧）/ 亮度（左侧）竖条
+            // 手势 HUD：音量（右侧）/ 亮度（左侧）竖条（竖屏视频区矮，竖条收短）
             volumeHud?.let { fraction ->
                 GestureHudBar(
                     fraction = fraction,
                     icon = { tint, size ->
                         Icon(Icons.Filled.VolumeUp, "音量", tint = tint, modifier = Modifier.size(size))
                     },
+                    barHeight = if (isFullscreen) 140.dp else 120.dp,
                     modifier = Modifier
                         .align(Alignment.CenterEnd)
                         .padding(end = 24.dp),
@@ -414,6 +437,7 @@ fun PlayerScreen(onClose: () -> Unit, viewModel: PlayerViewModel = viewModel()) 
                     icon = { tint, size ->
                         Icon(Icons.Filled.Brightness6, "亮度", tint = tint, modifier = Modifier.size(size))
                     },
+                    barHeight = if (isFullscreen) 140.dp else 120.dp,
                     modifier = Modifier
                         .align(Alignment.CenterStart)
                         .padding(start = 24.dp),
@@ -440,9 +464,9 @@ fun PlayerScreen(onClose: () -> Unit, viewModel: PlayerViewModel = viewModel()) 
             }
 
             // 状态提示条（续播/同步消息，4s 自动消失）：不看控制条是否可见——
-            // 看完同步的成功/失败提示多发生在控制条已隐藏时，必须让它露出来
+            // 看完同步的成功/失败提示多发生在控制条已隐藏时，必须让它露出来（画中画内不显示）
             val message = ui.statusMessage
-            if (message != null) {
+            if (message != null && !inPip) {
                 Text(
                     message,
                     color = Color.White,
@@ -477,8 +501,8 @@ fun PlayerScreen(onClose: () -> Unit, viewModel: PlayerViewModel = viewModel()) 
                 }
             }
 
-            // 连播征询条（95%/EOF 弹出，点"看下一集"才切）
-            ui.nextOffer?.let { offer ->
+            // 连播征询条（95%/EOF 弹出，点"看下一集"才切；画中画内不显示）
+            if (!inPip) ui.nextOffer?.let { offer ->
                 Row(
                     Modifier
                         .align(Alignment.BottomCenter)
@@ -572,6 +596,15 @@ fun PlayerScreen(onClose: () -> Unit, viewModel: PlayerViewModel = viewModel()) 
                             modifier = Modifier.size(24.dp),
                         )
                     }
+                    // 应用内悬浮小窗：退出本页、视频在页面角落继续播（拖动移位/拖角缩放）
+                    IconButton(onClick = onMinimize, modifier = Modifier.size(30.dp)) {
+                        Icon(
+                            Icons.Filled.PictureInPicture,
+                            contentDescription = "小窗播放",
+                            tint = Color.White,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
                     IconButton(onClick = { isFullscreen = !isFullscreen }, modifier = Modifier.size(30.dp)) {
                         Icon(
                             if (isFullscreen) Icons.Filled.FullscreenExit else Icons.Filled.Fullscreen,
@@ -585,7 +618,7 @@ fun PlayerScreen(onClose: () -> Unit, viewModel: PlayerViewModel = viewModel()) 
         }
 
         // 竖屏功能面板：视频下方的黑色区域（选集 / 倍速 / 线路 / 连播 / 缓存本集）
-        if (!isFullscreen) {
+        if (!immersive) {
             PortraitPanel(
                 viewModel = viewModel,
                 panel = viewModel.panel.collectAsState().value,
@@ -827,7 +860,7 @@ private fun EpisodeChip(number: Int, isCurrent: Boolean, modifier: Modifier = Mo
     }
 }
 
-// MARK: - 全屏手势（进度/音量/亮度）类型与工具
+// MARK: - 播放手势（进度/音量/亮度）类型与工具
 
 /** 进度拖动 HUD：delta = 相对起点的偏移秒数（负 = 回退），target = 目标时间点 */
 private data class SeekHud(val delta: Double, val target: Double)
@@ -854,9 +887,9 @@ private fun currentBrightness(window: Window?): Float {
 private fun GestureHudBar(
     fraction: Float,
     icon: @Composable (Color, androidx.compose.ui.unit.Dp) -> Unit,
+    barHeight: androidx.compose.ui.unit.Dp = 140.dp,
     modifier: Modifier = Modifier,
 ) {
-    val barHeight = 140.dp
     Column(
         modifier
             .background(Color.Black.copy(alpha = 0.65f), RoundedCornerShape(12.dp))

@@ -1,6 +1,7 @@
 package com.sparkhoward.nagomiani
 
 import android.os.Bundle
+import android.content.Intent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -9,6 +10,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -73,13 +75,69 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        handleNotifyIntent(intent)
         setContent {
             NagomiTheme {
                 NagomiNavHost()
             }
         }
     }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleNotifyIntent(intent)
+    }
+
+    /** 通知点按路由：切到番库页（onCreate / onNewIntent 两路统一）。
+     *  画中画中点通知：先把任务带回全屏（对小窗内的 Activity startActivity 自身即触发
+     *  系统还原全屏），展开产生的 onNewIntent 带 pipExpand 标记后完成跳转（防循环）——
+     *  否则番库页会渲染在四分之一屏的系统小窗里 */
+    private fun handleNotifyIntent(intent: Intent?) {
+        if (intent?.getStringExtra(com.sparkhoward.nagomiani.core.notify.EpisodeNotify.EXTRA_OPEN_TAB) !=
+            com.sparkhoward.nagomiani.core.notify.EpisodeNotify.OPEN_TAB_LIBRARY
+        ) {
+            return
+        }
+        if (com.sparkhoward.nagomiani.player.PlaybackBus.inPip.value && !intent.getBooleanExtra(EXTRA_PIP_EXPAND, false)) {
+            startActivity(
+                intent.putExtra(EXTRA_PIP_EXPAND, true)
+                    .setFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+            )
+            return
+        }
+        NavEvents.openLibrary.value += 1
+    }
+
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        // 回桌面保留「画中画」：正在播放时自动切系统画中画，用户回 App 即还原。
+        // 小窗态先回到播放器路由——PiP 渲染的是 Activity 当前页，必须保证是画面而非底层列表
+        if (com.sparkhoward.nagomiani.player.PlaybackBus.isPlaying.value) {
+            NavEvents.enterPipHook?.invoke()
+            runCatching {
+                enterPictureInPictureMode(
+                    android.app.PictureInPictureParams.Builder()
+                        .setAspectRatio(android.util.Rational(16, 9))
+                        .build(),
+                )
+            }
+        }
+    }
+
+    override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: android.content.res.Configuration) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        com.sparkhoward.nagomiani.player.PlaybackBus.inPip.value = isInPictureInPictureMode
+    }
 }
+
+/** 通知点按 → 切到番库页的事件通道；onUserLeaveHint 借由 hook 借道导航回播放器路由 */
+private object NavEvents {
+    val openLibrary = kotlinx.coroutines.flow.MutableStateFlow(0)
+    var enterPipHook: (() -> Unit)? = null
+}
+
+private const val EXTRA_PIP_EXPAND = "pipExpand"
 
 private data class Tab(val route: String, val label: String, val icon: ImageVector)
 
@@ -90,6 +148,7 @@ private fun NagomiNavHost() {
     val currentRoute = backStack?.destination?.route
     val playingNow by com.sparkhoward.nagomiani.player.PlaybackBus.isPlaying.collectAsState()
     val hasPlayback by com.sparkhoward.nagomiani.player.PlaybackBus.pending.collectAsState()
+    val miniActive by com.sparkhoward.nagomiani.player.PlaybackBus.miniActive.collectAsState()
 
     // Android 13+ 通知权限：缓存前台服务的进度通知依赖它（未授权时后台缓存仍工作，只是通知不可见）
     val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
@@ -97,11 +156,29 @@ private fun NagomiNavHost() {
     LaunchedEffect(Unit) {
         // 拉起下载服务：载入缓存索引（缓存页/角标展示）并恢复上次被杀中断的下载
         com.sparkhoward.nagomiani.core.download.DownloadUtil.ensureServiceStarted(activityContext)
+        // 追番更新提醒：注册每日后台检查（幂等，KEEP 策略）
+        com.sparkhoward.nagomiani.core.notify.EpisodeNotify.ensureScheduled(activityContext)
         // 应用内更新：启动静默检查 GitHub Releases（无新版本/网络失败均不打扰）
         com.sparkhoward.nagomiani.core.update.UpdateCenter.checkForUpdate(activityContext)
         if (android.os.Build.VERSION.SDK_INT >= 33) {
             notificationPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
         }
+    }
+
+    // 通知点按「更新到第 N 集」→ 跳番库页（onCreate/onNewIntent 两路都汇到这里）
+    LaunchedEffect(Unit) {
+        NavEvents.openLibrary.collect { count ->
+            if (count > 0) navController.navigate(Routes.LIBRARY) { launchSingleTop = true }
+        }
+    }
+
+    // 回桌面自动画中画：小窗态先回播放器路由（PiP 渲染的是 Activity 当前页）
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        NavEvents.enterPipHook = {
+            com.sparkhoward.nagomiani.player.PlaybackBus.miniActive.value = false
+            navController.navigate(Routes.PLAYER) { launchSingleTop = true }
+        }
+        onDispose { NavEvents.enterPipHook = null }
     }
 
     UpdateHost()
@@ -118,8 +195,8 @@ private fun NagomiNavHost() {
         containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
             Column {
-                // 回到播放中：有播放会话且不在播放器页时显示
-                if (showTabs && hasPlayback != null) {
+                // 回到播放中：有播放会话、不在播放器页且不在悬浮小窗时显示
+                if (showTabs && hasPlayback != null && !miniActive) {
                     Row(
                         Modifier
                             .fillMaxWidth()
@@ -168,40 +245,58 @@ private fun NagomiNavHost() {
             }
         },
     ) { padding ->
-        NavHost(
-            navController = navController,
-            startDestination = Routes.SEARCH,
-            modifier = Modifier.padding(padding),
-        ) {
-            composable(Routes.SEARCH) {
-                SearchScreen(onOpenDetail = { navController.navigate(Routes.detail(it)) }, onPlay = { navController.navigate(Routes.PLAYER) })
+        Box(Modifier.padding(padding)) {
+            NavHost(
+                navController = navController,
+                startDestination = Routes.SEARCH,
+            ) {
+                composable(Routes.SEARCH) {
+                    SearchScreen(onOpenDetail = { navController.navigate(Routes.detail(it)) }, onPlay = { navController.navigate(Routes.PLAYER) })
+                }
+                composable(Routes.LIBRARY) {
+                    LibraryScreen(onOpenDetail = { navController.navigate(Routes.detail(it)) }, onPlay = { navController.navigate(Routes.PLAYER) })
+                }
+                composable(Routes.BANGUMI) {
+                    BangumiScreen(onOpenDetail = { navController.navigate(Routes.detail(it)) }, onOpenLogin = { navController.navigate(Routes.LOGIN) })
+                }
+                composable(Routes.CACHE) {
+                    com.sparkhoward.nagomiani.ui.cache.CacheScreen(onPlay = { navController.navigate(Routes.PLAYER) })
+                }
+                composable(
+                    Routes.DETAIL,
+                    arguments = listOf(navArgument("subjectID") { }),
+                ) { entry ->
+                    val subjectID = entry.arguments?.getString("subjectID")?.toIntOrNull() ?: 0
+                    SubjectDetailScreen(
+                        subjectID = subjectID,
+                        onBack = { navController.popBackStack() },
+                        onPlay = { navController.navigate(Routes.PLAYER) },
+                    )
+                }
+                composable(
+                    Routes.PLAYER,
+                    // 返回/进小窗立即消失：默认约 700ms 的淡出会让视频画面滞留一秒
+                    exitTransition = { androidx.compose.animation.ExitTransition.None },
+                    popExitTransition = { androidx.compose.animation.ExitTransition.None },
+                    popEnterTransition = { androidx.compose.animation.EnterTransition.None },
+                ) {
+                    PlayerScreen(
+                        onClose = { navController.popBackStack() },
+                        // 应用内悬浮小窗：置位后 pop 返回上一层，视频在根层小窗继续播
+                        onMinimize = {
+                            com.sparkhoward.nagomiani.player.PlaybackBus.miniActive.value = true
+                            navController.popBackStack()
+                        },
+                    )
+                }
+                composable(Routes.LOGIN) {
+                    com.sparkhoward.nagomiani.ui.bangumi.LoginScreen(onDone = { navController.popBackStack() })
+                }
             }
-            composable(Routes.LIBRARY) {
-                LibraryScreen(onOpenDetail = { navController.navigate(Routes.detail(it)) }, onPlay = { navController.navigate(Routes.PLAYER) })
-            }
-            composable(Routes.BANGUMI) {
-                BangumiScreen(onOpenDetail = { navController.navigate(Routes.detail(it)) }, onOpenLogin = { navController.navigate(Routes.LOGIN) })
-            }
-            composable(Routes.CACHE) {
-                com.sparkhoward.nagomiani.ui.cache.CacheScreen(onPlay = { navController.navigate(Routes.PLAYER) })
-            }
-            composable(
-                Routes.DETAIL,
-                arguments = listOf(navArgument("subjectID") { }),
-            ) { entry ->
-                val subjectID = entry.arguments?.getString("subjectID")?.toIntOrNull() ?: 0
-                SubjectDetailScreen(
-                    subjectID = subjectID,
-                    onBack = { navController.popBackStack() },
-                    onPlay = { navController.navigate(Routes.PLAYER) },
-                )
-            }
-            composable(Routes.PLAYER) {
-                PlayerScreen(onClose = { navController.popBackStack() })
-            }
-            composable(Routes.LOGIN) {
-                com.sparkhoward.nagomiani.ui.bangumi.LoginScreen(onDone = { navController.popBackStack() })
-            }
+            // 应用内悬浮小窗：覆盖在所有页面之上（不遮底部导航栏）
+            com.sparkhoward.nagomiani.player.MiniPlayerOverlay(
+                onExpand = { navController.navigate(Routes.PLAYER) },
+            )
         }
     }
 }
@@ -218,9 +313,9 @@ private fun UpdateHost() {
             onDismissRequest = { UpdateCenter.dismiss(context) },
             title = { Text("发现新版本 ${s.release.tagName.removePrefix("v")}") },
             text = {
-                Text(
-                    s.release.body?.trim()?.take(600)?.ifBlank { null } ?: "无更新说明",
-                    fontSize = 13.sp,
+                // 发布说明按 Markdown 渲染（标题/列表/粗体/链接），不再显示原文标记
+                com.sparkhoward.nagomiani.ui.theme.MarkdownText(
+                    s.release.body?.trim()?.take(1500)?.ifBlank { null } ?: "无更新说明",
                     modifier = Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState()),
                 )
             },
