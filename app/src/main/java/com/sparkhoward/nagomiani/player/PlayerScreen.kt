@@ -46,6 +46,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.PictureInPicture
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.VolumeUp
@@ -80,6 +81,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.ViewModelStoreOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.sparkhoward.nagomiani.core.maccms.SourceHealth
 import com.sparkhoward.nagomiani.ui.theme.NagomiColors
 import com.sparkhoward.nagomiani.ui.theme.NagomiSecondaryButton
 import kotlinx.coroutines.delay
@@ -123,6 +125,8 @@ fun PlayerScreen(
                 PlaybackBus.isPlaying.value = false
                 viewModel.releaseIfIdle()
             }
+            // 分享弹层随本页销毁：定格素材（~20MB 位图）挂的是 Activity 级 VM，不清会常驻
+            viewModel.dismissShareSheet()
         }
     }
 
@@ -185,6 +189,7 @@ fun PlayerScreen(
 
     val ui by viewModel.ui.collectAsState()
     val state by viewModel.playerState.collectAsState()
+    val routeHealth by viewModel.routeHealth.collectAsState()
     val danmakuController by viewModel.danmaku.collectAsState()
     val danmakuSettings by viewModel.danmakuSettings.collectAsState()
     val danmakuState by (danmakuController?.state?.collectAsState() ?: remember { mutableStateOf(DanmakuController.State()) })
@@ -195,6 +200,14 @@ fun PlayerScreen(
     var isSeeking by remember { mutableStateOf(false) }
     var seekPreview by remember { mutableStateOf(0.0) }
     var showDanmakuSheet by remember { mutableStateOf(false) }
+    var showShareSheet by remember { mutableStateOf(false) }
+
+    // 弹幕覆盖层引用：截图分享时快照当前屏上的弹幕画面
+    var danmakuOverlayView by remember { mutableStateOf<DanmakuOverlayView?>(null) }
+
+    // 截图完成（定格素材就位）自动展开分享弹层；失败走状态提示条不弹层
+    val shareCapture = viewModel.shareCapture
+    LaunchedEffect(shareCapture) { if (shareCapture != null) showShareSheet = true }
 
     // 播放手势：进度/音量/亮度 HUD 与长按倍速状态
     var seekHud by remember { mutableStateOf<SeekHud?>(null) }
@@ -251,7 +264,7 @@ fun PlayerScreen(
             if (controller != null) {
                 AndroidView(
                     factory = { context ->
-                        DanmakuOverlayView(context).apply { start() }
+                        DanmakuOverlayView(context).apply { start() }.also { danmakuOverlayView = it }
                     },
                     update = { view ->
                         view.timeProvider = { viewModel.playerState.value.positionSeconds }
@@ -575,11 +588,11 @@ fun PlayerScreen(
                             .height(26.dp),
                     )
                     Text(PlayerViewModel.formatTime(state.durationSeconds), color = Color.White, fontSize = 10.sp)
-                    // 线路切换仅横屏展示（竖屏移至下方功能面板）
+                    // 线路切换仅横屏展示（竖屏移至下方功能面板）；⚡ = 探测延迟最低的线路
                     if (isFullscreen) {
                         viewModel.playback?.routes.orEmpty().forEachIndexed { index, _ ->
                             Text(
-                                "线路${index + 1}",
+                                routeLabel(index, routeHealth),
                                 color = if (index == viewModel.currentRouteIndex) NagomiColors.accentDark else Color.White.copy(alpha = 0.8f),
                                 fontSize = 11.sp,
                                 modifier = Modifier
@@ -594,6 +607,15 @@ fun PlayerScreen(
                             contentDescription = "播放/暂停",
                             tint = Color.White,
                             modifier = Modifier.size(24.dp),
+                        )
+                    }
+                    // 截图分享：定格当前画面（干净帧 + 弹幕快照），弹层里选样式预览/保存/分享
+                    IconButton(onClick = { viewModel.captureForShare(danmakuOverlayView) }, modifier = Modifier.size(30.dp)) {
+                        Icon(
+                            Icons.Filled.PhotoCamera,
+                            contentDescription = "截图分享",
+                            tint = Color.White,
+                            modifier = Modifier.size(18.dp),
                         )
                     }
                     // 应用内悬浮小窗：退出本页、视频在页面角落继续播（拖动移位/拖角缩放）
@@ -624,6 +646,7 @@ fun PlayerScreen(
                 panel = viewModel.panel.collectAsState().value,
                 speed = viewModel.speed.collectAsState().value,
                 autoplayNext = viewModel.autoplayNext.collectAsState().value,
+                routeHealth = routeHealth,
                 modifier = Modifier
                     .weight(1f, fill = false)
                     .verticalScroll(rememberScrollState()),
@@ -656,6 +679,35 @@ fun PlayerScreen(
                 )
             }
         }
+
+        // 截图分享弹层：与弹幕设置同款非模态覆盖层；关闭后延迟清定格素材，让滑出动画播完
+        AnimatedVisibility(
+            visible = showShareSheet,
+            enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
+            exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
+            modifier = Modifier.fillMaxSize(),
+        ) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                    ) { showShareSheet = false },
+                contentAlignment = Alignment.BottomCenter,
+            ) {
+                ShareCardSheet(
+                    viewModel = viewModel,
+                    onDismiss = { showShareSheet = false },
+                )
+            }
+        }
+        if (!showShareSheet) {
+            LaunchedEffect(Unit) {
+                delay(300)
+                viewModel.dismissShareSheet()
+            }
+        }
     }
 }
 
@@ -666,6 +718,7 @@ private fun PortraitPanel(
     panel: PlayerViewModel.PanelState,
     speed: Float,
     autoplayNext: Boolean,
+    routeHealth: List<Long?>,
     modifier: Modifier = Modifier,
 ) {
     LaunchedEffect(Unit) { viewModel.loadPanelIfNeeded() }
@@ -730,14 +783,14 @@ private fun PortraitPanel(
             }
         }
 
-        // 线路切换（多线路时）
+        // 线路切换（多线路时；⚡最快 + API/CDN TTFB 延迟标注）
         if (routes.size > 1) {
             Row(Modifier.padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("线路", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.width(8.dp))
                 routes.forEachIndexed { index, _ ->
                     Text(
-                        "线路${index + 1}",
+                        routeLabel(index, routeHealth),
                         color = if (index == viewModel.currentRouteIndex) NagomiColors.accent else MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 13.sp,
                         modifier = Modifier
@@ -868,6 +921,16 @@ private data class SeekHud(val delta: Double, val target: Double)
 private fun formatSeekDelta(delta: Double): String {
     val sign = if (delta >= 0) "+" else "-"
     return sign + PlayerViewModel.formatTime(abs(delta))
+}
+
+/** 线路标签：⚡ 前缀 = 探测延迟最低的线路；有探测结果时附 TTFB（探测中/单线路不显示） */
+private fun routeLabel(index: Int, routeHealth: List<Long?>): String {
+    val fastest = SourceHealth.fastestRouteIndex(routeHealth)
+    return buildString {
+        if (index == fastest) append("⚡")
+        append("线路${index + 1}")
+        routeHealth.getOrNull(index)?.let { append(" · ${SourceHealth.formatLatency(it)}") }
+    }
 }
 
 /** 当前窗口亮度；从未设置过（-1）时读系统亮度，再失败取 0.5 */

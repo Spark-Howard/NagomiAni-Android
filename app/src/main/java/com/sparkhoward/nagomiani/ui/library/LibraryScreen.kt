@@ -110,6 +110,19 @@ fun LibraryScreen(
             }
         }
 
+        // 片源健康：站点测速（延迟/可达性/最快标记）+ 自加站点管理
+        item {
+            SourceHealthPanel(
+                rows = viewModel.siteRows.collectAsState().value,
+                health = viewModel.siteHealth.collectAsState().value,
+                probing = viewModel.probingSites.collectAsState().value,
+                message = viewModel.siteMessage.collectAsState().value,
+                onProbe = { viewModel.probeSites() },
+                onAddSite = { viewModel.addUserSite(it) },
+                onRemoveSite = { viewModel.removeUserSite(it) },
+            )
+        }
+
         // 继续观看
         if (state.continueItems.isNotEmpty()) {
             item { NagomiSectionHeader("继续观看", Icons.Filled.Schedule, Modifier.padding(horizontal = 16.dp)) }

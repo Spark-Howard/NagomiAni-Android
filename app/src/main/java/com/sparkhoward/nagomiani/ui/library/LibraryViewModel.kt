@@ -8,6 +8,7 @@ import com.sparkhoward.nagomiani.core.bangumi.BangumiApi
 import com.sparkhoward.nagomiani.core.bangumi.BangumiAuth
 import com.sparkhoward.nagomiani.core.maccms.MacCMSApi
 import com.sparkhoward.nagomiani.core.maccms.OnlineRepo
+import com.sparkhoward.nagomiani.core.maccms.SourceHealth
 import com.sparkhoward.nagomiani.core.model.OnlineEpisode
 import com.sparkhoward.nagomiani.core.model.OnlinePlayback
 import com.sparkhoward.nagomiani.core.model.OnlineShow
@@ -61,6 +62,91 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
     init {
         viewModelScope.launch {
             store.updateNotifyEnabled.collect { updateNotify.value = it }
+        }
+    }
+
+    // MARK: - 片源健康面板（站点测速 + 自加站点管理）
+
+    /** 健康面板行：内置站中文名/自加站 host；userRaw = AppStore 里存的原始串（删除时用） */
+    data class SiteRow(
+        val label: String,
+        val providerID: String,
+        val isUser: Boolean,
+        val userRaw: String? = null,
+    )
+
+    val siteRows = MutableStateFlow<List<SiteRow>>(emptyList())
+    val siteHealth = MutableStateFlow<Map<String, AppStore.SiteHealthEntry>>(emptyMap())
+    val probingSites = MutableStateFlow(false)
+    val siteMessage = MutableStateFlow<String?>(null)
+
+    init {
+        viewModelScope.launch {
+            store.siteHealthMap.collect { siteHealth.value = it }
+        }
+        viewModelScope.launch {
+            store.userSites.collect { rows ->
+                // 内置 4 站 + 自加站（按 host 与内置去重，同 OnlineRepo.allSites 语义）
+                val list = ArrayList<SiteRow>()
+                MacCMSApi.builtinSites.forEach { (label, url) ->
+                    list += SiteRow(label, MacCMSApi(url).providerID, isUser = false)
+                }
+                val seen = list.map { it.providerID }.toSet()
+                rows.mapNotNull { raw -> MacCMSApi.normalizeAPIBase(raw)?.let { raw to it } }
+                    .forEach { (raw, base) ->
+                        val host = MacCMSApi(base).providerID
+                        if (host !in seen) list += SiteRow(host, host, isUser = true, userRaw = raw)
+                    }
+                siteRows.value = list
+            }
+        }
+    }
+
+    /** 测速全部站点（并发 ac=list 探测）并持久化；结果经 siteHealthMap 流回流 */
+    fun probeSites() {
+        if (probingSites.value) return
+        viewModelScope.launch {
+            probingSites.value = true
+            try {
+                store.replaceSiteHealth(SourceHealth.probeAllSites(onlineRepo.allSites()))
+            } finally {
+                probingSites.value = false
+            }
+        }
+    }
+
+    /** 添加自加站点：规范化成功且不与现有站重 host 才入库 */
+    fun addUserSite(raw: String) {
+        viewModelScope.launch {
+            val base = MacCMSApi.normalizeAPIBase(raw)
+            if (base == null) {
+                showSiteMessage("无法识别该地址，请粘贴站点主页或 API 地址")
+                return@launch
+            }
+            val host = MacCMSApi(base).providerID
+            if (onlineRepo.allSites().any { MacCMSApi(it.second).providerID == host }) {
+                showSiteMessage("该站点已存在（$host）")
+                return@launch
+            }
+            store.addUserSite(base)
+            showSiteMessage("已添加 $host")
+        }
+    }
+
+    fun removeUserSite(row: SiteRow) {
+        viewModelScope.launch {
+            row.userRaw?.let {
+                store.removeUserSite(it)
+                showSiteMessage("已移除 ${row.label}")
+            }
+        }
+    }
+
+    private fun showSiteMessage(text: String) {
+        siteMessage.value = text
+        viewModelScope.launch {
+            kotlinx.coroutines.delay(4000)
+            if (siteMessage.value == text) siteMessage.value = null
         }
     }
 

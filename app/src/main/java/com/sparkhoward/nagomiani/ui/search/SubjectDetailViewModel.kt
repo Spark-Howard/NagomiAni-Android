@@ -21,6 +21,8 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 /** 详情页状态：条目 + 我的收藏 + 跨站片源（番 → 分集） */
@@ -55,6 +57,8 @@ class SubjectDetailViewModel(app: Application) : AndroidViewModel(app) {
     )
 
     val state = MutableStateFlow(State())
+    /** 各站点最近测速结果（番库「片源健康」面板写入，这里只读展示徽章；key=providerID） */
+    val siteHealth = store.siteHealthMap.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
     /** 离线缓存状态（resumeKey → 状态/进度），详情页方框与缓存按钮共用 */
     val downloadStates = com.sparkhoward.nagomiani.core.download.DownloadUtil.states
     private var current: Subject? = null

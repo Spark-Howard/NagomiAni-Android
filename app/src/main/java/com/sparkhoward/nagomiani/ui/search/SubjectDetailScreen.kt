@@ -56,6 +56,7 @@ import com.sparkhoward.nagomiani.core.model.CollectionType
 import com.sparkhoward.nagomiani.core.model.SubjectInfobox
 import com.sparkhoward.nagomiani.core.model.Subject
 import com.sparkhoward.nagomiani.player.PlaybackBus
+import com.sparkhoward.nagomiani.ui.library.LatencyBadge
 import com.sparkhoward.nagomiani.ui.theme.NagomiBadge
 import com.sparkhoward.nagomiani.ui.theme.NagomiColors
 import com.sparkhoward.nagomiani.ui.theme.NagomiSecondaryButton
@@ -293,6 +294,9 @@ private fun DetailBody(state: SubjectDetailViewModel.State, viewModel: SubjectDe
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             NagomiBadge(show.providerID, MaterialTheme.colorScheme.primary)
+                            Spacer(Modifier.width(6.dp))
+                            // 最近一次站点测速结果（番库「片源健康」面板测的，帮助选源）
+                            LatencyBadge(viewModel.siteHealth.collectAsState().value[show.providerID])
                             Spacer(Modifier.width(8.dp))
                             Text(show.title, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                             Text("${episodes.size} 集", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)

@@ -1,9 +1,21 @@
 package com.sparkhoward.nagomiani.player
 
 import android.app.Application
+import android.content.ContentValues
 import android.content.Context
+import android.graphics.Bitmap
+import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.os.Handler
+import android.os.Looper
+import android.provider.MediaStore
+import android.view.PixelCopy
+import android.view.SurfaceView
+import android.view.TextureView
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.C
@@ -19,6 +31,7 @@ import com.sparkhoward.nagomiani.core.bangumi.BangumiAuth
 import com.sparkhoward.nagomiani.core.bangumi.BangumiError
 import com.sparkhoward.nagomiani.core.dandanplay.DandanplayApi
 import com.sparkhoward.nagomiani.core.maccms.OnlineRepo
+import com.sparkhoward.nagomiani.core.maccms.SourceHealth
 import com.sparkhoward.nagomiani.core.model.CollectionModifyPayload
 import com.sparkhoward.nagomiani.core.model.CollectionType
 import com.sparkhoward.nagomiani.core.model.OnlineEpisode
@@ -27,11 +40,17 @@ import com.sparkhoward.nagomiani.core.model.OnlineShow
 import com.sparkhoward.nagomiani.core.store.AppStore
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
 
 /**
  * 播放器 ViewModel：与 mac 版 PlayerModel 同语义——
@@ -205,6 +224,10 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     private var lastSaveAt = 0L
     private var lastSeekAt: Long = 0
     private var nextOfferTriggered = false
+    // 断流自动兜底：本集已自动换线次数（上限=routes.size-1；手动切线重新武装、换集复位）
+    private var autoFails = 0
+    /** 连续 BUFFERING 起始时刻（0=未在缓冲）；≥10s 判定线路断流 */
+    private var bufferingSinceMs = 0L
     private var markedThisSession = HashSet<String>()
     private val confirmedCollected = HashSet<Int>()
     private var periodicJob: Job? = null
@@ -237,6 +260,9 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         // 重进/重播同一集允许重新判定看完同步（否则首播已入列的 key 会挡住后续所有同步）
         markedThisSession.remove("${item.seriesKey}:${item.episodeNumber}")
         currentRouteIndex = 0 // 新会话从首选线路开始（上集切过线路时必须复位）
+        autoFails = 0 // 换集复位断流自动兜底计数
+        bufferingSinceMs = 0L
+        probeRoutes(item)
         ui.value = UIState(title = item.displayTitle ?: "", isLoading = true)
 
         val context = getApplication<Application>()
@@ -312,6 +338,8 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         }
 
         override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+            // 断流自动兜底：还有没试过的线路就静默换线（保进度），换遍才显示错误 UI
+            if (attemptAutoFailover("中断")) return
             ui.value = ui.value.copy(isLoading = false, error = "播放出错：${error.message ?: "未知错误"}")
         }
     }
@@ -355,22 +383,70 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         exoPlayer?.seekTo((seconds * 1000).toLong())
     }
 
-    /** 线路切换：同集换 URL，保留当前进度（mac 版 switchRoute 同语义） */
+    /** 线路切换：同集换 URL，保留当前进度（mac 版 switchRoute 同语义）。手动切换会重新武装断流自动兜底 */
     fun switchRoute(routeIndex: Int) {
         val item = playback ?: return
-        val player = exoPlayer ?: return
         val routes = item.routes
         if (!routes.indices.contains(routeIndex) || routeIndex == currentRouteIndex) return
+        autoFails = 0
+        applyRoute(routeIndex)
+        ui.value = ui.value.copy(statusMessage = "已切换到线路 ${routeIndex + 1}")
+    }
+
+    /** 无提示换线（手动/自动共用）：换 URL 保进度；保留暂停态（openMedia 会置 playWhenReady，
+     *  不还原的话暂停中出错自动换线会让视频意外起播）；同时复位卡顿看门狗——手动换线后
+     *  新线路的缓冲不继承上一条线路的停滞计时 */
+    private fun applyRoute(routeIndex: Int) {
+        val item = playback ?: return
+        val player = exoPlayer ?: return
         val position = player.currentPosition
-        val updated = item.copy(url = routes[routeIndex])
+        val resumeOnReady = player.playWhenReady
+        val updated = item.copy(url = item.routes[routeIndex])
         playback = updated
         currentRouteIndex = routeIndex
         openMedia(player, updated.url, updated, position / 1000.0)
-        ui.value = ui.value.copy(statusMessage = "已切换到线路 ${routeIndex + 1}")
+        player.playWhenReady = resumeOnReady
+        bufferingSinceMs = 0
+    }
+
+    /** 断流自动兜底：换下一条线路（循环），换遍其余线路仍失败则放弃返回 false（上限由 nextRouteOnFailure 把守） */
+    private fun attemptAutoFailover(reason: String): Boolean {
+        val routes = playback?.routes ?: return false
+        val next = SourceHealth.nextRouteOnFailure(currentRouteIndex, routes.size, autoFails) ?: return false
+        autoFails++
+        val from = currentRouteIndex + 1
+        applyRoute(next)
+        ui.value = ui.value.copy(error = null, statusMessage = "线路$from $reason，已自动切换到线路${next + 1}")
+        return true
     }
 
     var currentRouteIndex: Int = 0
         private set
+
+    // MARK: - 线路测速（多线路会话进入时后台探测 TTFB，面板标注延迟与最快线路）
+
+    /** 每条线路的探测延迟（与 routes 同序；null=探测中或超时） */
+    val routeHealth = MutableStateFlow<List<Long?>>(emptyList())
+
+    private var routeProbeJob: Job? = null
+
+    private fun probeRoutes(item: OnlinePlayback) {
+        routeProbeJob?.cancel()
+        if (item.routes.size < 2) {
+            routeHealth.value = emptyList()
+            return
+        }
+        routeHealth.value = List(item.routes.size) { null }
+        routeProbeJob = viewModelScope.launch {
+            val results = coroutineScope {
+                item.routes.map { url ->
+                    async { SourceHealth.probeRoute(url, item.httpHeaders, item.userAgent) }
+                }.awaitAll()
+            }
+            // 会话可能已换集：routes 未变才落地，避免旧集的延迟标到新集上
+            if (playback?.routes == item.routes) routeHealth.value = results
+        }
+    }
 
     // MARK: - 周期任务：位置落盘（5s 节流）+ 看完判定 + 连播提示
 
@@ -384,6 +460,22 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
                 val position = player.currentPosition / 1000.0
                 val duration = if (player.duration == C.TIME_UNSET) 0.0 else player.duration / 1000.0
                 playerState.value = playerState.value.copy(positionSeconds = position, durationSeconds = duration)
+
+                // 断流看门狗：连续 BUFFERING ≥10s 视为线路断流，走与硬错误相同的自动换线通道。
+                // 只在用户意图播放（playWhenReady）时计时——暂停中卡缓冲不换线（换了也会顶掉暂停态）；
+                // 手动 seek 引起的短暂缓冲通常 <10s，不会误触发
+                if (player.playWhenReady && player.playbackState == Player.STATE_BUFFERING) {
+                    if (bufferingSinceMs == 0L) {
+                        bufferingSinceMs = System.currentTimeMillis()
+                    } else if (System.currentTimeMillis() - bufferingSinceMs >= 10_000) {
+                        bufferingSinceMs = 0L
+                        if (!attemptAutoFailover("卡顿超时")) {
+                            ui.value = ui.value.copy(isLoading = false, error = "播放卡顿：各线路均超时，请检查网络或手动切换线路")
+                        }
+                    }
+                } else {
+                    bufferingSinceMs = 0L
+                }
 
                 // 落盘闸门：续播点未到达前不覆盖旧记录
                 val target = resumeTarget
@@ -557,6 +649,159 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // MARK: - 截图分享卡
+
+    /** 截图那一刻的定格素材：干净帧（表面尺寸）+ 弹幕快照（同尺寸）+ 视频内容区（裁黑边）+ 元数据 */
+    data class ShareCapture(
+        val frame: Bitmap,
+        val overlay: Bitmap?,
+        val contentRect: PixelRect,
+        val meta: ShareCardMeta,
+    )
+
+    var shareCapture by androidx.compose.runtime.mutableStateOf<ShareCapture?>(null)
+        private set
+    var shareCard by androidx.compose.runtime.mutableStateOf<Bitmap?>(null)
+        private set
+    var shareBusy by androidx.compose.runtime.mutableStateOf(false)
+        private set
+    /** 保存相册进行中（防双击存两张） */
+    var shareSaving by androidx.compose.runtime.mutableStateOf(false)
+        private set
+    private var composeJob: Job? = null
+
+    /** 截当前画面（主线程 PixelCopy 只拷视频表面，不含控制条/手势 HUD；弹幕快照同步先取）。
+     *  成功后 shareCapture 就位，PlayerScreen 据此展开分享弹层 */
+    fun captureForShare(danmakuView: DanmakuOverlayView?) {
+        val item = playback ?: return
+        val player = exoPlayer ?: return
+        val playerView = sharedPlayerView ?: return
+        if (shareBusy) return
+        val surface = playerView.videoSurfaceView
+        val surfaceW = surface?.width ?: 0
+        val surfaceH = surface?.height ?: 0
+        if (surfaceW <= 0 || surfaceH <= 0) {
+            showStatus("画面还未就绪，稍后再试")
+            return
+        }
+        shareBusy = true
+        val meta = ShareCardMeta(
+            showTitle = item.showTitle ?: "",
+            episodeNumber = item.episodeNumber,
+            episodeTitle = item.displayTitle,
+            positionSeconds = player.currentPosition / 1000.0,
+            durationSeconds = if (player.duration == C.TIME_UNSET) 0.0 else player.duration / 1000.0,
+        )
+        val contentRect = ShareCardMath.videoContentRect(surfaceW, surfaceH, player.videoSize.width, player.videoSize.height)
+        val overlay = danmakuView?.snapshotOverlay()
+        when (surface) {
+            is TextureView -> { // 兜底（默认配置为 SurfaceView，通常不会走到）
+                shareBusy = false
+                shareCapture = surface.bitmap?.let { ShareCapture(it, overlay, contentRect, meta) }
+            }
+            is SurfaceView -> {
+                val out = Bitmap.createBitmap(surfaceW, surfaceH, Bitmap.Config.ARGB_8888)
+                try {
+                    PixelCopy.request(surface, out, { result ->
+                        shareBusy = false
+                        if (result == PixelCopy.SUCCESS) {
+                            shareCapture = ShareCapture(out, overlay, contentRect, meta)
+                        } else {
+                            showStatus("截图失败（$result），请稍后再试")
+                        }
+                    }, Handler(Looper.getMainLooper()))
+                } catch (e: Exception) {
+                    shareBusy = false
+                    showStatus("截图失败：${e.message ?: "未知错误"}")
+                }
+            }
+            else -> {
+                shareBusy = false
+                showStatus("截图失败：画面类型不支持")
+            }
+        }
+    }
+
+    /** 按样式/弹幕开关/配文合成输出图（Default 线程；连续切换时取消上一次合成） */
+    fun composeShareCard(style: ShareCardStyle, withDanmaku: Boolean, caption: String) {
+        val capture = shareCapture ?: return
+        if (shareBusy) return
+        composeJob?.cancel()
+        composeJob = viewModelScope.launch {
+            shareCard = withContext(Dispatchers.Default) {
+                ShareCardComposer.compose(capture.frame, capture.overlay, capture.contentRect, capture.meta, style, withDanmaku, caption)
+            }
+        }
+    }
+
+    /** 把当前输出图写为 PNG 并返回 FileProvider URI（系统分享面板用）；写前清掉旧分享文件 */
+    fun shareCardUri(): Uri? {
+        val card = shareCard ?: return null
+        val context = getApplication<Application>()
+        return runCatching {
+            val dir = File(context.cacheDir, "share").apply { mkdirs() }
+            dir.listFiles()?.forEach { it.delete() }
+            val meta = shareCapture?.meta
+            val name = ShareCardMath.fileName(meta?.showTitle ?: "video", meta?.episodeNumber ?: 0, System.currentTimeMillis())
+            val file = File(dir, "$name.png")
+            file.outputStream().use { card.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+        }.onFailure {
+            android.util.Log.w("NagomiShare", "write share card failed", it)
+        }.getOrNull()
+    }
+
+    /** 保存当前输出图到系统相册 Pictures/NagomiAni（API 29+ 免权限；26-28 由调用方先申请存储权限） */
+    fun saveCardToGallery() {
+        val card = shareCard ?: return
+        if (shareSaving) return
+        shareSaving = true
+        val context = getApplication<Application>()
+        viewModelScope.launch {
+            val message = withContext(Dispatchers.IO) {
+                runCatching {
+                    val meta = shareCapture?.meta
+                    val name = ShareCardMath.fileName(meta?.showTitle ?: "video", meta?.episodeNumber ?: 0, System.currentTimeMillis())
+                    val values = ContentValues().apply {
+                        put(MediaStore.Images.Media.DISPLAY_NAME, "$name.png")
+                        put(MediaStore.Images.Media.MIME_TYPE, "image/png")
+                        if (Build.VERSION.SDK_INT >= 29) {
+                            put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/NagomiAni")
+                            put(MediaStore.Images.Media.IS_PENDING, 1)
+                        }
+                    }
+                    val resolver = context.contentResolver
+                    val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                        ?: error("相册写入被拒绝")
+                    resolver.openOutputStream(uri)?.use { card.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                        ?: error("相册写入被拒绝")
+                    if (Build.VERSION.SDK_INT >= 29) {
+                        values.clear()
+                        values.put(MediaStore.Images.Media.IS_PENDING, 0)
+                        resolver.update(uri, values, null, null)
+                    }
+                    "已保存到相册 ✓"
+                }.getOrElse {
+                    android.util.Log.w("NagomiShare", "save card failed", it)
+                    "保存失败：${it.message ?: "未知错误"}"
+                }
+            }
+            shareSaving = false
+            showStatus(message)
+        }
+    }
+
+    fun showStatus(message: String) {
+        ui.value = ui.value.copy(statusMessage = message)
+    }
+
+    /** 关闭分享弹层：清掉定格素材与输出图（截图素材 ~20MB 不能常驻；位图不 recycle，交 GC 回收避免与绘制竞态） */
+    fun dismissShareSheet() {
+        composeJob?.cancel()
+        shareCapture = null
+        shareCard = null
+    }
+
     // MARK: - 生命周期
 
     fun releaseIfIdle() {
@@ -565,11 +810,13 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun stopPlayback() {
+        routeProbeJob?.cancel()
         exoPlayer?.stop()
     }
 
     override fun onCleared() {
         periodicJob?.cancel()
+        routeProbeJob?.cancel()
         exoPlayer?.release()
         exoPlayer = null
         sharedPlayerView = null

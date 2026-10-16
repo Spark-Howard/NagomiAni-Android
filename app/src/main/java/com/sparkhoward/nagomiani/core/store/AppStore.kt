@@ -36,6 +36,7 @@ class AppStore(private val context: Context) {
         val danmakuCustomColor = intPreferencesKey("danmaku.customColor")
         val danmakuOpacity = doublePreferencesKey("danmaku.opacity")
         val maccmsSites = stringSetPreferencesKey("online.maccms.sites")
+        val siteHealth = stringPreferencesKey("online.site.health.json") // {providerID: SiteHealthEntry}
         val networkProxy = stringPreferencesKey("network.proxy")                  // "host:port" 或空
         val skippedUpdate = stringPreferencesKey("update.skippedVersion")         // 「下次再说」的 tag
         val bindings = stringPreferencesKey("bangumi.bindings.json")          // {seriesKey: subjectID}
@@ -73,6 +74,26 @@ class AppStore(private val context: Context) {
 
     suspend fun addUserSite(url: String) = edit { it[Keys.maccmsSites] = (it[Keys.maccmsSites] ?: emptySet()) + url }
     suspend fun removeUserSite(url: String) = edit { it[Keys.maccmsSites] = (it[Keys.maccmsSites] ?: emptySet()) - url }
+
+    // MARK: - 片源健康（providerID=host → 最近一次测速；番库面板与详情页徽章共用）
+
+    /** ok=false 时 latencyMs 无意义；testedAt 供将来判断陈旧度 */
+    @Serializable
+    data class SiteHealthEntry(val ok: Boolean, val latencyMs: Long, val testedAt: Long)
+
+    val siteHealthMap: Flow<Map<String, SiteHealthEntry>> = context.dataStore.data.map { prefs ->
+        prefs[Keys.siteHealth]?.let { runCatching { json.decodeFromString<Map<String, SiteHealthEntry>>(it) }.getOrNull() } ?: emptyMap()
+    }
+
+    suspend fun siteHealthOnce(): Map<String, SiteHealthEntry> = siteHealthMap.first()
+
+    /** 合并写入（只更新本次探测到的站，保留其他站的旧记录） */
+    suspend fun replaceSiteHealth(map: Map<String, SiteHealthEntry>) = edit { prefs ->
+        if (map.isEmpty()) return@edit
+        val merged = HashMap(prefs[Keys.siteHealth]?.let { runCatching { json.decodeFromString<Map<String, SiteHealthEntry>>(it) }.getOrNull() } ?: emptyMap())
+        merged.putAll(map)
+        prefs[Keys.siteHealth] = json.encodeToString(merged)
+    }
 
     // MARK: - 应用内网络代理（bgm.tv 整域 DNS 污染时的出口；空串 = 直连）
 

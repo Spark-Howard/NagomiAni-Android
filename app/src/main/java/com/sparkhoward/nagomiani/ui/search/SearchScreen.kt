@@ -35,14 +35,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
-import com.sparkhoward.nagomiani.core.model.CalendarDay
 import com.sparkhoward.nagomiani.core.model.CollectionType
 import com.sparkhoward.nagomiani.core.model.Subject
 import com.sparkhoward.nagomiani.ui.theme.NagomiBadge
 import com.sparkhoward.nagomiani.ui.theme.NagomiColors
 import com.sparkhoward.nagomiani.ui.theme.NagomiSectionHeader
 
-/** 搜索页：搜索框 + 结果列表；无关键词时展示"最近更新（过去一周）"周历 */
+/** 搜索页：搜索框 + 结果列表；无关键词时展示"新番放送（今天起一周）"周历 */
 @Composable
 fun SearchScreen(
     onOpenDetail: (Int) -> Unit,
@@ -117,7 +116,7 @@ private fun WeeklySection(state: SearchViewModel.State, viewModel: SearchViewMod
                 Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                NagomiSectionHeader("最近更新（过去一周）", Icons.Filled.Search, Modifier.weight(1f))
+                NagomiSectionHeader("新番放送（今天起一周）", Icons.Filled.Search, Modifier.weight(1f))
                 state.weeklyFetchedAt?.let {
                     Text("更新于 $it", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
@@ -139,28 +138,27 @@ private fun WeeklySection(state: SearchViewModel.State, viewModel: SearchViewMod
         state.weeklyError?.let { error ->
             item { Text(error, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(16.dp)) }
         }
-        items(state.weekly, key = { it.weekday.id }) { day ->
-            DaySection(day, onOpenDetail)
+        items(state.weekly, key = { it.date.toEpochDay() }) { slot ->
+            DaySection(slot, onOpenDetail)
         }
     }
 }
 
 @Composable
-private fun DaySection(day: CalendarDay, onOpenDetail: (Int) -> Unit) {
-    if (day.items.isEmpty()) return
-    val today = java.time.LocalDate.now().dayOfWeek.value
+private fun DaySection(slot: com.sparkhoward.nagomiani.core.online.WeeklyCalendar.Slot, onOpenDetail: (Int) -> Unit) {
+    if (slot.day.items.isEmpty()) return
     Column(Modifier.padding(vertical = 6.dp)) {
         Text(
-            if (day.weekday.id == today) "今天" else "周" + "一二三四五六日".substring(day.weekday.id - 1, day.weekday.id),
+            slot.label,
             style = MaterialTheme.typography.titleMedium,
-            color = if (day.weekday.id == today) NagomiColors.accent else MaterialTheme.colorScheme.onBackground,
+            color = if (slot.isToday) NagomiColors.accent else MaterialTheme.colorScheme.onBackground,
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
         )
         LazyRow(
             contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            items(day.items, key = { it.id }) { subject ->
+            items(slot.day.items, key = { it.id }) { subject ->
                 SubjectCard(subject, onOpenDetail)
             }
         }

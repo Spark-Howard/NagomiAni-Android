@@ -6,7 +6,6 @@ import androidx.lifecycle.viewModelScope
 import com.sparkhoward.nagomiani.AppGraph
 import com.sparkhoward.nagomiani.core.bangumi.BangumiApi
 import com.sparkhoward.nagomiani.core.bangumi.BangumiAuth
-import com.sparkhoward.nagomiani.core.model.CalendarDay
 import com.sparkhoward.nagomiani.core.model.SUBJECT_TYPE_ANIME
 import com.sparkhoward.nagomiani.core.model.Subject
 import kotlinx.coroutines.FlowPreview
@@ -16,7 +15,7 @@ import kotlinx.coroutines.launch
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 
-/** 搜索页状态：搜索结果 / 默认"最近更新"周历 */
+/** 搜索页状态：搜索结果 / 默认"新番放送"周历 */
 class SearchViewModel(app: Application) : AndroidViewModel(app) {
 
     private val auth = BangumiAuth(app)
@@ -26,7 +25,7 @@ class SearchViewModel(app: Application) : AndroidViewModel(app) {
         val keyword: String = "",
         val searching: Boolean = false,
         val results: List<Subject> = emptyList(),
-        val weekly: List<CalendarDay> = emptyList(),
+        val weekly: List<com.sparkhoward.nagomiani.core.online.WeeklyCalendar.Slot> = emptyList(),
         val weeklyLoading: Boolean = false,
         val weeklyError: String? = null,
         val weeklyFetchedAt: String? = null,
@@ -66,7 +65,7 @@ class SearchViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 最近更新（过去一周，按天分组；今天在前）——/calendar 即"每周放送"，聚合规则同 mac 版 */
+    /** 新番放送（今天起未来一周，按天分组带真实日期）——/calendar 即"每周放送表"，随今天逐日向前滚动 */
     fun loadWeekly() {
         val generation = ++weeklyGeneration
         viewModelScope.launch {
@@ -74,16 +73,10 @@ class SearchViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val days = api().calendar()
                 if (generation != weeklyGeneration) return@launch // 手动刷新已发出，过期响应不落地
-                val todayIndex = todayBangumiWeekday()
-                // 重排：今天 → 前 6 天（/calendar 的 id: 1=周一…7=周日）
-                val ordered = buildList {
-                    for (i in 0..6) {
-                        val id = ((todayIndex - i + 6) % 7) + 1
-                        days.firstOrNull { it.weekday.id == id }?.let { add(it) }
-                    }
-                }
+                // /calendar 以日本时区（JST）编排放送日；槽位日期必须同区，否则跨天时段会错位一天
+                val today = LocalDate.now(java.time.ZoneId.of("Asia/Tokyo"))
                 state.value = state.value.copy(
-                    weekly = ordered,
+                    weekly = com.sparkhoward.nagomiani.core.online.WeeklyCalendar.slots(today, days),
                     weeklyLoading = false,
                     weeklyFetchedAt = java.time.LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss")),
                 )
@@ -92,12 +85,6 @@ class SearchViewModel(app: Application) : AndroidViewModel(app) {
                 state.value = state.value.copy(weeklyLoading = false, weeklyError = "加载失败：${e.message}")
             }
         }
-    }
-
-    private fun todayBangumiWeekday(): Int {
-        // Bangumi /calendar 以日本时区（JST）编排放送日；用设备本地日期会在
-        // JST 已跨天而本地未跨天的时段错位一天（如北京时间 23 点后）
-        return LocalDate.now(java.time.ZoneId.of("Asia/Tokyo")).dayOfWeek.value // 1=周一…7=周日
     }
 
     /** 我的收藏徽章（登录时给搜索结果加"想看/在看"角标）。列表端点按用户名寻址，先取 me() */

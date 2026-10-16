@@ -1,6 +1,7 @@
 package com.sparkhoward.nagomiani.player
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
@@ -203,6 +204,15 @@ class DanmakuOverlayView(context: Context) : View(context) {
             }
             DrawState(fill, stroke, fill.measureText(item.comment.text))
         }
+    }
+
+    /** 截图分享用：把当前屏上的弹幕绘进透明位图（尺寸=视图尺寸，坐标系与视频表面一致）。
+     *  复用 onDraw 同一绘制路径；弹幕关闭/无弹幕/未布局时返回 null（截图走无弹幕版） */
+    fun snapshotOverlay(): Bitmap? {
+        if (width <= 0 || height <= 0 || !settings.enabled || assigned.isEmpty()) return null
+        val bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        draw(android.graphics.Canvas(bmp))
+        return bmp
     }
 
     override fun onDetachedFromWindow() {
