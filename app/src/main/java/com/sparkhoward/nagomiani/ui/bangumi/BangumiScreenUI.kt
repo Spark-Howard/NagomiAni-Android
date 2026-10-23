@@ -276,24 +276,6 @@ fun BangumiScreen(
                                 )
                             }
                         }
-                        // 「+1」快捷推进（仅在看 Tab 且未看完的行）：看完最新一集一键 +1
-                        val totalEps = subject?.episodeCount
-                        val canAdvance = state.selected == CollectionType.DOING &&
-                            (totalEps == null || collection.epStatus < totalEps)
-                        if (canAdvance) {
-                            val rowUpdating by viewModel.rowUpdating.collectAsState()
-                            Box(
-                                Modifier
-                                    .padding(start = 8.dp)
-                                    .size(32.dp)
-                                    .clip(CircleShape)
-                                    .background(NagomiColors.accent.copy(alpha = 0.15f))
-                                    .clickable(enabled = !rowUpdating) { viewModel.advanceEpisode(collection) },
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Text("+1", fontSize = 12.sp, color = NagomiColors.accent, fontWeight = FontWeight.Bold)
-                            }
-                        }
                     }
                 }
             }

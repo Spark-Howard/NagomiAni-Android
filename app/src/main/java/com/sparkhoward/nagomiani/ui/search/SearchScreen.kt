@@ -29,6 +29,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -116,13 +117,14 @@ fun SearchScreen(
 @Composable
 private fun WeeklySection(state: SearchViewModel.State, viewModel: SearchViewModel, onOpenDetail: (Int) -> Unit) {
     val listState = rememberLazyListState()
-    // 首次载入定位到「今天」：窗口是近 7 天 + 未来 7 天（日期升序），今天在中间约第 8 组；
+    // 两天一档（今天+明天为初始档，往上是更早的、往下是更晚的）；首次载入定位到含今天的档；
     // 手动刷新不重新定位（用户可能正停在别处回看）
     var anchoredToToday by rememberSaveable { mutableStateOf(false) }
+    val sections = remember(state.weekly) { com.sparkhoward.nagomiani.core.online.WeeklyCalendar.twoDaySections(state.weekly) }
     LaunchedEffect(state.weekly) {
-        if (!anchoredToToday && state.weekly.isNotEmpty()) {
+        if (!anchoredToToday && sections.isNotEmpty()) {
             anchoredToToday = true
-            val index = state.weekly.indexOfFirst { it.isToday }
+            val index = sections.indexOfFirst { sec -> sec.any { it.isToday } }
             if (index >= 0) listState.scrollToItem(index)
         }
     }
@@ -154,8 +156,20 @@ private fun WeeklySection(state: SearchViewModel.State, viewModel: SearchViewMod
         state.weeklyError?.let { error ->
             item { Text(error, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(16.dp)) }
         }
-        items(state.weekly, key = { it.date.toEpochDay() }) { slot ->
-            DaySection(slot, onOpenDetail)
+        sections.forEach { section ->
+            item(key = "sec_" + section.first().date.toEpochDay()) {
+                Column(Modifier.padding(vertical = 6.dp)) {
+                    section.filter { it.day.items.isNotEmpty() }.forEachIndexed { idx, slot ->
+                        if (idx > 0) {
+                            androidx.compose.material3.HorizontalDivider(
+                                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                            )
+                        }
+                        DaySection(slot, onOpenDetail)
+                    }
+                }
+            }
         }
     }
 }

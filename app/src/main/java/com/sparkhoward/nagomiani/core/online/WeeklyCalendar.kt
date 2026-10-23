@@ -36,6 +36,25 @@ object WeeklyCalendar {
         }
     }
 
+    /**
+     * 搜索页周历的「两天一档」分组：以「今天+明天」为锚成档，
+     * 之前的档从靠近今天侧两两分组（近 7 天为奇数时最早 1 天单独成档），
+     * 之后的自然两两分组；返回按日期升序的档列表（UI 初始定位含今天的档）。
+     */
+    fun twoDaySections(slots: List<Slot>): List<List<Slot>> {
+        val todayIdx = slots.indexOfFirst { it.isToday }
+        if (todayIdx < 0) return slots.chunked(2)
+        val before = slots.subList(0, todayIdx)
+        val todayPair = slots.subList(todayIdx, minOf(todayIdx + 2, slots.size))
+        val after = slots.subList(todayIdx + 2, slots.size)
+        val out = mutableListOf<List<Slot>>()
+        // 今天之前的档：从靠近今天侧两两分组后，整段反转为时间升序
+        before.reversed().chunked(2).map { it.reversed() }.reversed().forEach { out.add(it) }
+        out.add(todayPair)
+        out.addAll(after.chunked(2))
+        return out
+    }
+
     /** 天头标签：今天/昨天/明天点明 + 「M/d 周X」，日期始终在场消除歧义 */
     fun label(date: LocalDate, today: LocalDate): String {
         val weekday = "周" + "一二三四五六日"[date.dayOfWeek.value - 1]

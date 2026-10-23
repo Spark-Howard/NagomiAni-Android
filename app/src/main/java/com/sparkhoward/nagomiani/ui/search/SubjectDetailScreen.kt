@@ -54,6 +54,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import kotlin.math.max
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
@@ -110,6 +111,8 @@ private fun DetailBody(state: SubjectDetailViewModel.State, viewModel: SubjectDe
     var infoboxExpanded by remember { mutableStateOf(false) }
     // 分集批量操作确认（true=全部看过 / false=清除全部）
     var confirmBatch by remember { mutableStateOf<Boolean?>(null) }
+    // 单集标记确认（防误触）：点格子先弹窗，确认后才标记/取消
+    var pendingToggle by remember { mutableStateOf<Episode?>(null) }
     var onlineExpanded by remember { mutableStateOf(true) }
 
     Column(
@@ -159,6 +162,12 @@ private fun DetailBody(state: SubjectDetailViewModel.State, viewModel: SubjectDe
         Column(Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 NagomiSectionHeader("我的收藏", Icons.Filled.FavoriteBorder, Modifier.weight(1f))
+                // 当前收藏状态徽章：仅靠胶囊选中态不够醒目，直接亮出「在看/想看/未收藏」
+                NagomiBadge(
+                    state.myCollection?.let { CollectionType.fromRaw(it).label } ?: "未收藏",
+                    if (state.myCollection != null) NagomiColors.accent else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(end = 8.dp),
+                )
                 if (state.collectionSaving) {
                     CircularProgressIndicator(color = NagomiColors.accent, modifier = Modifier.padding(end = 8.dp).size(16.dp))
                 }
@@ -259,8 +268,15 @@ private fun DetailBody(state: SubjectDetailViewModel.State, viewModel: SubjectDe
                     NagomiSectionHeader("分集", Icons.Filled.Tv, Modifier.weight(1f))
                     if (state.episodes.isNotEmpty()) {
                         val watchedCount = state.episodes.count { it.id in state.watchedEpisodeIds }
+                        // 「看到第 X 集」= 已看本篇的最大集号（回显服务端 ep_status 与本地标记的较大者）
+                        val watchedMainSorts = state.episodes.filter { it.type == 0 && it.id in state.watchedEpisodeIds }.map { it.displaySort }
+                        val latest = maxOf(watchedMainSorts.maxOrNull() ?: 0, state.myEpStatus ?: 0)
+                        val progressText = buildString {
+                            append("已看 $watchedCount / ${state.episodes.size}")
+                            if (latest > 0) append(" · 看到第 $latest 集")
+                        }
                         Text(
-                            "已看 $watchedCount / ${state.episodes.size}",
+                            progressText,
                             fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(end = 10.dp),
@@ -302,7 +318,7 @@ private fun DetailBody(state: SubjectDetailViewModel.State, viewModel: SubjectDe
                                     unaired = viewModel.isUnaired(ep),
                                     enabled = !state.episodeSaving,
                                     modifier = Modifier.weight(1f),
-                                ) { viewModel.toggleEpisode(ep) }
+                                ) { pendingToggle = ep }
                             }
                             repeat(5 - rowEps.size) { Spacer(Modifier.weight(1f)) }
                         }
@@ -319,6 +335,25 @@ private fun DetailBody(state: SubjectDetailViewModel.State, viewModel: SubjectDe
                     }
                 }
             }
+        }
+
+        // 单集标记确认（防误触）
+        pendingToggle?.let { ep ->
+            val watched = ep.id in state.watchedEpisodeIds
+            val label = if (ep.type == 1) "SP${ep.ep?.toInt() ?: ""}" else "第 ${ep.displaySort} 集"
+            AlertDialog(
+                onDismissRequest = { pendingToggle = null },
+                title = { Text(if (watched) "取消标记" else "标记为看过") },
+                text = { Text("「${subject.displayName}」$label" + if (watched) " 已看过，要取消标记吗？" else " 标记为看过，并同步到 Bangumi？") },
+                confirmButton = {
+                    TextButton(onClick = { pendingToggle = null; viewModel.toggleEpisode(ep) }) {
+                        Text(if (watched) "取消标记" else "标为看过", color = NagomiColors.accent, fontWeight = FontWeight.SemiBold)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { pendingToggle = null }) { Text("取消") }
+                },
+            )
         }
 
         // 分集批量确认

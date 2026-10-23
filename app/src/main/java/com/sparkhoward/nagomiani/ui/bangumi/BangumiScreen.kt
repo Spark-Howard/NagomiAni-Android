@@ -7,7 +7,6 @@ import com.sparkhoward.nagomiani.AppGraph
 import com.sparkhoward.nagomiani.core.bangumi.BangumiApi
 import com.sparkhoward.nagomiani.core.bangumi.BangumiAuth
 import com.sparkhoward.nagomiani.core.model.BangumiUser
-import com.sparkhoward.nagomiani.core.model.CollectionModifyPayload
 import com.sparkhoward.nagomiani.core.model.CollectionType
 import com.sparkhoward.nagomiani.core.model.UserSubjectCollection
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -44,9 +43,6 @@ class BangumiViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 今日更新提醒开关（DailyAiringNotifier 的 Worker 每天读它决定是否检查） */
     val notifyEnabled = MutableStateFlow(true)
-
-    /** 收藏行 +1 请求进行中（按钮防抖） */
-    val rowUpdating = MutableStateFlow(false)
 
     /** 应用内代理（输入草稿 + 保存结果提示） */
     val proxyDraft = MutableStateFlow("")
@@ -147,38 +143,6 @@ class BangumiViewModel(app: Application) : AndroidViewModel(app) {
             Sort.UPDATED -> s.collections.sortedByDescending { it.updatedAt ?: "" }
             Sort.RATED -> s.collections.sortedByDescending { it.rate ?: 0 }
             Sort.AIR_DATE -> s.collections.sortedByDescending { it.subject?.airDate ?: "" }
-        }
-    }
-
-    /** 收藏行 +1：ep_status 推进一集（payload 带原收藏态——upsert 不改五态；绝不带 rate/vol_status）。
-     *  乐观更新本地列表，失败还原；总集数已知时封顶 */
-    fun advanceEpisode(collection: UserSubjectCollection) {
-        val total = collection.subject?.episodeCount
-        val next = collection.epStatus + 1
-        if (total != null && next > total) return
-        if (rowUpdating.value) return
-        viewModelScope.launch {
-            if (!auth.isLoggedIn()) {
-                state.value = state.value.copy(error = "未登录 Bangumi，无法更新进度")
-                return@launch
-            }
-            rowUpdating.value = true
-            val old = state.value.collections
-            state.value = state.value.copy(
-                collections = old.map {
-                    if (it.subjectId == collection.subjectId) it.copy(epStatus = next) else it
-                },
-            )
-            try {
-                val api = BangumiApi { auth.refreshIfNeeded().accessToken }
-                api.updateCollection(
-                    collection.subjectId,
-                    CollectionModifyPayload(type = collection.type, epStatus = next),
-                )
-            } catch (e: Exception) {
-                state.value = state.value.copy(collections = old, error = "进度更新失败：${e.message ?: "网络错误"}")
-            }
-            rowUpdating.value = false
         }
     }
 

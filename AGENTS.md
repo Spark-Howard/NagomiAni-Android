@@ -63,6 +63,7 @@ app/src/main/java/com/sparkhoward/nagomiani/
 - **放送日/周历一律用 JST**（`ZoneId.of("Asia/Tokyo")`）：Bangumi 按日本时区编排，用本地时区会在
   跨天时段错位一天。周历语义 = 「近 7 天 + 未来 7 天」窗口（±7 天、日期升序、UI 初始滚动定位今天，
   `WeeklyCalendar`），不要回退成回溯式裸星期或只显示未来的单向窗口。
+  搜索页展示为**两天一档**（`twoDaySections`：今天+明天成档为初始定位）。
 - **AppStore 范式**：结构化数据用 `@Serializable` + JSON 字符串键；可测的纯逻辑抽成 object
   （参考 `DanmakuLayout`/`HistoryStats`/`WeeklyCalendar` 的 measure 注入/纯函数分区），
   测试用 kotlin.test 平铺断言。**DataStore 的 `edit{}` 块内绝不能再读同一个文件**（持锁重入）——
@@ -93,5 +94,5 @@ app/src/main/java/com/sparkhoward/nagomiani/
   桌面小部件 ×2 与长按快捷方式（`ui/widget/` + `WidgetIntents.route` deeplink）、
   今日更新提醒（`core/notify/DailyAiringNotifier`：放送表 × 在看收藏，JST 日期基线每日一次）、
   集数标记 + 收藏评分短评（详情页）、收藏列表增强（全量翻页/排序/进度条/+1）。
-- 单元测试 90 项，全部纯 JVM（无 robolectric），新增可测逻辑请照 `HistoryStatsTest`/
+- 单元测试 92 项，全部纯 JVM（无 robolectric），新增可测逻辑请照 `HistoryStatsTest`/
   `SourceHealthTest` 风格补测试。
