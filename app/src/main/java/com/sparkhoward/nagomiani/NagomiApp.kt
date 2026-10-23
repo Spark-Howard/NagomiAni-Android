@@ -33,11 +33,43 @@ class NagomiApp : Application(), ImageLoaderFactory {
     override fun onCreate() {
         super.onCreate()
         AppGraph.init(this)
-        com.sparkhoward.nagomiani.core.notify.DailyAiringNotifier.ensureChannel(this)
         applyNetworkSettings()
+        createDownloadChannel()
+        createUpdateNotifyChannel()
+        createDailyAiringChannel()
     }
 
-    /** 代理设置变化即时生效：OkHttp（API）+ WebView（OAuth 授权页）+ Coil（封面） */
+    /** 离线缓存下载服务的前台通知渠道 */
+    private fun createDownloadChannel() {
+        val channel = android.app.NotificationChannel(
+            com.sparkhoward.nagomiani.player.NagomiDownloadService.CHANNEL_ID,
+            "离线缓存",
+            android.app.NotificationManager.IMPORTANCE_LOW,
+        )
+        getSystemService(android.app.NotificationManager::class.java).createNotificationChannel(channel)
+    }
+
+    /** 追番更新提醒的通知渠道（有声音、不弹横幅） */
+    private fun createUpdateNotifyChannel() {
+        val channel = android.app.NotificationChannel(
+            com.sparkhoward.nagomiani.core.notify.EpisodeNotify.CHANNEL_ID,
+            "追番更新",
+            android.app.NotificationManager.IMPORTANCE_DEFAULT,
+        )
+        getSystemService(android.app.NotificationManager::class.java).createNotificationChannel(channel)
+    }
+
+    /** 今日放送提醒渠道（DailyAiringNotifier：放送表 × 在看收藏） */
+    private fun createDailyAiringChannel() {
+        val channel = android.app.NotificationChannel(
+            com.sparkhoward.nagomiani.core.notify.DailyAiringNotifier.CHANNEL_ID,
+            getString(com.sparkhoward.nagomiani.R.string.notify_channel_name),
+            android.app.NotificationManager.IMPORTANCE_DEFAULT,
+        )
+        getSystemService(android.app.NotificationManager::class.java).createNotificationChannel(channel)
+    }
+
+    /** 代理设置变化即时生效：OkHttp（API/片源/弹幕）+ WebView（OAuth 授权页）+ Coil（封面） */
     private fun applyNetworkSettings() {
         val executor = Executor { it.run() }
         CoroutineScope(Dispatchers.Default).launch {

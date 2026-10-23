@@ -5,7 +5,11 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.sparkhoward.nagomiani.AppGraph
 import com.sparkhoward.nagomiani.core.history.HistoryStats
+import com.sparkhoward.nagomiani.core.maccms.OnlineRepo
+import com.sparkhoward.nagomiani.core.model.OnlineEpisode
+import com.sparkhoward.nagomiani.core.model.OnlineShow
 import com.sparkhoward.nagomiani.core.store.AppStore.HistoryRecord
+import com.sparkhoward.nagomiani.player.PlaybackBus
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 
@@ -13,6 +17,7 @@ import kotlinx.coroutines.launch
 class HistoryViewModel(app: Application) : AndroidViewModel(app) {
 
     private val store get() = AppGraph.store
+    private val onlineRepo = OnlineRepo()
 
     enum class Tab(val label: String) { HISTORY("历史"), STATS("统计") }
     enum class Filter(val label: String) { ALL("全部"), WATCHING("在看"), FINISHED("看完") }
@@ -58,9 +63,19 @@ class HistoryViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 点历史行：在线片源功能已整体移除（合规版），历史仅作本地观看记录展示 */
+    /** 点历史行续播（组装套路同番库继续观看卡片） */
     fun playRecord(row: HistoryRecord, onLaunched: () -> Unit) {
-        showMessage("在线片源功能已下线，历史仅作观看记录")
+        viewModelScope.launch {
+            val show = OnlineShow(row.providerID, row.showID, row.showTitle, null, row.coverURL)
+            val episode = OnlineEpisode(row.providerID, row.showID, row.episodeNumber)
+            val playback = onlineRepo.preparePlayback(show, episode, showTitleForDanmaku = row.showTitle)
+            if (playback != null) {
+                PlaybackBus.launch(playback)
+                onLaunched()
+            } else {
+                showMessage("取流失败，片源可能已失效")
+            }
+        }
     }
 
     private fun showMessage(text: String) {

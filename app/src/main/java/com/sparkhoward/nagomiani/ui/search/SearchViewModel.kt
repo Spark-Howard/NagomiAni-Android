@@ -65,7 +65,7 @@ class SearchViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 新番放送（近 7 天 + 未来 7 天，日期升序；UI 初始定位今天）——/calendar 即"每周放送表"，随今天逐日向前滚动 */
+    /** 新番放送（今天起未来一周，按天分组带真实日期）——/calendar 即"每周放送表"，随今天逐日向前滚动 */
     fun loadWeekly() {
         val generation = ++weeklyGeneration
         viewModelScope.launch {

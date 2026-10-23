@@ -63,21 +63,25 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
 /**
- * 观看历史 + 统计（底部 Tab 直达）：
- * 历史 = 全部看过的集（可搜索/按在看筛选，按天分组）；
- * 统计 = 概览卡 + 近 7 日分布柱状图 + 年度看番报告（TOP 番）。
+ * 观看历史 + 统计（番库页进入的二级页）：
+ * 历史 = 全部看过的集（可搜索/按在看筛选，按天分组，点行续播）；
+ * 统计 = 概览卡 + 近 7 日分布柱状图 + 年度热力图 + 年度看番报告（TOP 番） + 数据备份。
  * 数据全本地（AppStore.player.history.json，旧 resume 一次性回填）。
- * 在线片源功能已移除（合规版）：点行不再续播，仅提示。
  */
 @Composable
 fun HistoryScreen(
+    onBack: () -> Unit,
+    onPlay: () -> Unit,
     viewModel: HistoryViewModel = viewModel(),
 ) {
     val state by viewModel.state.collectAsState()
 
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-        // 顶栏（Tab 直达无返回箭头）
-        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+        // 顶栏
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = MaterialTheme.colorScheme.onBackground)
+            }
             Text("观看历史", style = MaterialTheme.typography.titleLarge)
         }
 
@@ -89,7 +93,7 @@ fun HistoryScreen(
         ) { viewModel.setTab(it) }
 
         when (state.tab) {
-            HistoryViewModel.Tab.HISTORY -> HistoryTab(viewModel)
+            HistoryViewModel.Tab.HISTORY -> HistoryTab(viewModel, onPlay)
             HistoryViewModel.Tab.STATS -> StatsTab(viewModel)
         }
     }
@@ -98,7 +102,7 @@ fun HistoryScreen(
 // MARK: - 历史列表
 
 @Composable
-private fun HistoryTab(viewModel: HistoryViewModel) {
+private fun HistoryTab(viewModel: HistoryViewModel, onPlay: () -> Unit) {
     val state by viewModel.state.collectAsState()
     val list = viewModel.filtered()
 
@@ -167,7 +171,7 @@ private fun HistoryTab(viewModel: HistoryViewModel) {
                 )
             }
             items(rows, key = { it.seriesKey + ":" + it.episodeNumber }) { row ->
-                HistoryRow(row) { viewModel.playRecord(row) {} }
+                HistoryRow(row) { viewModel.playRecord(row, onLaunched = onPlay) }
             }
         }
         state.message?.let {
