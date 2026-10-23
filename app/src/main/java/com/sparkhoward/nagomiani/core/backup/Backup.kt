@@ -20,7 +20,7 @@ import java.util.Locale
  * 数据备份/恢复（换机迁移）：观看历史 + 用户设置。
  * 导出 = cacheDir/backup/ 落 JSON → FileProvider URI → 系统分享面板；
  * 导入 = 文件选择器给的 Uri 读流解析 → 历史按 lastWatchedAt 新者胜合并、设置逐项回写。
- * 不含 resume/knownShows（合规版遗留数据）与 skippedUpdate（设备本地语义）。
+ * 不含 resume/knownShows（旧版遗留数据，与 Bangumi subject id 无关联）与 skippedUpdate（设备本地语义）。
  */
 object Backup {
 

@@ -228,6 +228,9 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     private var autoFails = 0
     /** 连续 BUFFERING 起始时刻（0=未在缓冲）；≥10s 判定线路断流 */
     private var bufferingSinceMs = 0L
+    // 观看历史：真实观看秒数累计（播放推进才计，seek 跳变>10s 不计），随 5s 节流落盘一起刷入
+    private var watchAccumSeconds = 0.0
+    private var lastWatchTickPosition = -1.0
     private var markedThisSession = HashSet<String>()
     private val confirmedCollected = HashSet<Int>()
     private var periodicJob: Job? = null
@@ -262,6 +265,8 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         currentRouteIndex = 0 // 新会话从首选线路开始（上集切过线路时必须复位）
         autoFails = 0 // 换集复位断流自动兜底计数
         bufferingSinceMs = 0L
+        watchAccumSeconds = 0.0 // 换集复位观看时长累计
+        lastWatchTickPosition = -1.0
         probeRoutes(item)
         ui.value = UIState(title = item.displayTitle ?: "", isLoading = true)
 
@@ -461,6 +466,13 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
                 val duration = if (player.duration == C.TIME_UNSET) 0.0 else player.duration / 1000.0
                 playerState.value = playerState.value.copy(positionSeconds = position, durationSeconds = duration)
 
+                // 观看历史时长累计：播放推进才计；seek 跳变（>10s）与回跳不计
+                if (player.isPlaying) {
+                    val delta = position - lastWatchTickPosition
+                    if (lastWatchTickPosition >= 0 && delta > 0 && delta <= 10) watchAccumSeconds += delta
+                }
+                lastWatchTickPosition = position
+
                 // 断流看门狗：连续 BUFFERING ≥10s 视为线路断流，走与硬错误相同的自动换线通道。
                 // 只在用户意图播放（playWhenReady）时计时——暂停中卡缓冲不换线（换了也会顶掉暂停态）；
                 // 手动 seek 引起的短暂缓冲通常 <10s，不会误触发
@@ -485,6 +497,8 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
                 if (position > 0 && System.currentTimeMillis() - lastSaveAt >= 5_000) {
                     lastSaveAt = System.currentTimeMillis()
                     store.updateResume(item.resumeKey, position, duration)
+                    // 观看历史随同一节流时机落盘（不增加写盘频率）
+                    flushHistory(item, position, duration)
                 }
 
                 // 看完同步（90%，≥300s，seek 后 10s 不判定）+ 连播提示（同阈值）
@@ -495,6 +509,8 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
                             nextOfferTriggered = true
                             markWatched(item)
                             offerNextEpisode(item)
+                            // 本地口径看完（不依赖登录）：历史记录置 finished
+                            flushHistory(item, position, duration, keepAccum = true, finished = true)
                         }
                     }
                 }
@@ -507,11 +523,37 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             // 播完清记录（下次从头）
             store.removeResume(item.resumeKey)
+            // 观看历史：EOF 是会话终点，把残余观看增量一并刷入并置 finished
+            // （与 resume 的"播完即删"互补，历史不删）
+            flushHistory(item, playerState.value.durationSeconds, playerState.value.durationSeconds, finished = true)
             // EOF 是确定的「看完」：无条件同步（幂等）+ 无条件提供下一集，
             // 不受 90% 一次性判定影响——顺着正常看完永远会同步
             markWatched(item, force = true)
             offerNextEpisode(item)
         }
+    }
+
+    /** 观看历史落盘（合并语义在 AppStore）。[keepAccum]=true 用于 90% 看完标记（还在播，
+     *  累计保留给后续节流）；EOF 用默认 false 把残余增量刷入后清零 */
+    private suspend fun flushHistory(
+        item: OnlinePlayback,
+        position: Double,
+        duration: Double,
+        keepAccum: Boolean = false,
+        finished: Boolean = false,
+    ) {
+        store.recordWatchProgress(
+            resumeKey = item.resumeKey,
+            seriesKey = item.seriesKey,
+            showTitle = item.showTitle ?: "",
+            episodeNumber = item.episodeNumber,
+            episodeTitle = null,
+            deltaSeconds = if (keepAccum) 0.0 else watchAccumSeconds,
+            position = position,
+            duration = duration,
+        )
+        if (!keepAccum) watchAccumSeconds = 0.0
+        if (finished) store.markHistoryFinished(item.resumeKey)
     }
 
     /** 看完同步：有绑定→PATCH watched；失败→离线队列（下次进播放器页时冲刷）。
