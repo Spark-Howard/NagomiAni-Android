@@ -197,7 +197,10 @@ class BangumiAuth(private val context: Context) {
     /** 过期前 60s 内刷新（refresh_token 轮换：响应里的新 token 覆盖旧值）。
      *  刷新必须全局串行：tokenProvider 会被多个 API 实例并发调用，两个协程拿同一旧
      *  refresh_token 去换，轮换后必有一方 401（bgm 的 refresh_token 一次性）；
-     *  BangumiAuth 按调用方各自实例化，锁必须放伴生对象才能覆盖全部实例 */
+     *  BangumiAuth 按调用方各自实例化，锁必须放伴生对象才能覆盖全部实例。
+     *  刷新被服务器明确拒绝（400/401/403，如 refresh_token 已被轮换作废）时清空会话——
+     *  保留旧值只会让 App 陷入「看起来已登录、所有鉴权查询都 401」的僵尸态；
+     *  网络/服务端临时故障则保留旧值等下次重试 */
     suspend fun refreshIfNeeded(): Session = refreshMutex.withLock {
         val current = session()
         if (!current.needsRefresh()) return current
@@ -212,8 +215,15 @@ class BangumiAuth(private val context: Context) {
             )
             persist(refreshed)
             refreshed
-        } catch (e: Exception) {
-            current // 刷新失败保留旧值（可能还有效）
+        } catch (e: BangumiError.Http) {
+            if (e.code in setOf(400, 401, 403)) {
+                logout()
+                Session(null, null, 0L, 0L) // 会话已作废：如实回到未登录态，UI 引导重新登录
+            } else {
+                current
+            }
+        } catch (_: Exception) {
+            current // 网络等临时故障：保留旧值（可能还有效）
         }
     }
 

@@ -1,7 +1,13 @@
 package com.sparkhoward.nagomiani.ui.search
 
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,11 +24,19 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Today
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -30,15 +44,23 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
+import kotlin.math.abs
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import com.sparkhoward.nagomiani.core.model.CollectionType
@@ -114,62 +136,226 @@ fun SearchScreen(
     }
 }
 
+/**
+ * 周历主体：刷新栏常驻屏幕上方不随内容滚走；内容区是「一天一页」的横滑 Pager
+ * （手机桌面滑屏式翻页动画），初始页定位「今天」，左右滑看前一天/后一天的更新；
+ * 离开今天页后右下角浮现「回到今天」，点击平滑翻回初始页。
+ * 手动刷新不重新定位（用户可能正停在别处回看），刷新中在刷新栏下方出细进度条。
+ */
 @Composable
 private fun WeeklySection(state: SearchViewModel.State, viewModel: SearchViewModel, onOpenDetail: (Int) -> Unit) {
-    val listState = rememberLazyListState()
-    // 两天一档（今天+明天为初始档，往上是更早的、往下是更晚的）；首次载入定位到含今天的档；
-    // 手动刷新不重新定位（用户可能正停在别处回看）
-    var anchoredToToday by rememberSaveable { mutableStateOf(false) }
-    val sections = remember(state.weekly) { com.sparkhoward.nagomiani.core.online.WeeklyCalendar.twoDaySections(state.weekly) }
-    LaunchedEffect(state.weekly) {
-        if (!anchoredToToday && sections.isNotEmpty()) {
-            anchoredToToday = true
-            val index = sections.indexOfFirst { sec -> sec.any { it.isToday } }
-            // LazyColumn 第 0 项是周历标题行，档位 item 从 1 起——定位要 +1 才落在含今天的档
-            if (index >= 0) listState.scrollToItem(index + 1)
-        }
-    }
-    LazyColumn(Modifier.fillMaxSize(), state = listState) {
-        item {
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                NagomiSectionHeader("新番放送（近一周 · 未来一周）", Icons.Filled.Search, Modifier.weight(1f))
-                state.weeklyFetchedAt?.let {
-                    Text("更新于 $it", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                Text(
-                    " 刷新",
-                    color = MaterialTheme.colorScheme.primary,
-                    fontSize = 13.sp,
-                    modifier = Modifier.clickable { viewModel.loadWeekly() },
-                )
+    val slots = state.weekly
+    // 今天页（初始页/回到今天的目标）；/calendar 异常缺今天时兜底到第 0 页
+    val homePage = slots.indexOfFirst { it.isToday }.coerceAtLeast(0)
+
+    Column(Modifier.fillMaxSize()) {
+        // 刷新栏：固定在屏幕上方
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            NagomiSectionHeader("新番放送（近一周 · 未来一周）", Icons.Filled.Search, Modifier.weight(1f))
+            state.weeklyFetchedAt?.let {
+                Text("更新于 $it", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
+            Text(
+                " 刷新",
+                color = MaterialTheme.colorScheme.primary,
+                fontSize = 13.sp,
+                modifier = Modifier.clickable { viewModel.loadWeekly() },
+            )
         }
-        if (state.weeklyLoading) {
-            item {
-                Box(Modifier.fillMaxWidth().padding(40.dp), contentAlignment = Alignment.Center) {
+        // 已有数据时的手动刷新：细进度条，不打断浏览
+        if (state.weeklyLoading && slots.isNotEmpty()) {
+            LinearProgressIndicator(Modifier.fillMaxWidth(), color = NagomiColors.accent)
+        }
+        state.weeklyError?.let { error ->
+            Text(error, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(16.dp))
+        }
+
+        if (slots.isEmpty()) {
+            if (state.weeklyLoading) {
+                Box(Modifier.fillMaxSize().padding(40.dp), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator(color = NagomiColors.accent)
                 }
             }
+            return
         }
-        state.weeklyError?.let { error ->
-            item { Text(error, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(16.dp)) }
-        }
-        sections.forEach { section ->
-            item(key = "sec_" + section.first().date.toEpochDay()) {
-                Column(Modifier.padding(vertical = 6.dp)) {
-                    section.filter { it.day.items.isNotEmpty() }.forEachIndexed { idx, slot ->
-                        if (idx > 0) {
-                            androidx.compose.material3.HorizontalDivider(
-                                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                            )
+
+        val scope = rememberCoroutineScope()
+        val pagerState = rememberPagerState(initialPage = homePage, pageCount = { slots.size })
+        var pagerWidthPx by remember { mutableStateOf(0) }
+        Box(Modifier.fillMaxSize()) {
+            Column(Modifier.fillMaxSize()) {
+                // 日期选择条：点按直达任意一天（翻页手势的零精度替代），选中态跟随翻页
+                DayStrip(
+                    slots = slots,
+                    currentPage = pagerState.currentPage,
+                    homePage = homePage,
+                    onSelect = { index -> scope.launch { pagerState.animateScrollToPage(index) } },
+                )
+                HorizontalPager(
+                    state = pagerState,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .onSizeChanged { pagerWidthPx = it.width }
+                        // 自带手势关闭：横滑全部交给 dayPagerSwipe 的横向优先仲裁
+                        .dayPagerSwipe(pagerState, pagerWidthPx, scope),
+                    userScrollEnabled = false,
+                ) { page ->
+                    val slot = slots[page]
+                    Column(
+                        Modifier
+                            .fillMaxSize()
+                            .verticalScroll(rememberScrollState()),
+                    ) {
+                        if (slot.day.items.isEmpty()) {
+                            Box(Modifier.fillMaxWidth().padding(48.dp), contentAlignment = Alignment.Center) {
+                                Text("这一天没有新番更新", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        } else {
+                            DaySection(slot, onOpenDetail)
                         }
-                        DaySection(slot, onOpenDetail)
                     }
                 }
+            }
+            // 回到今天：仅在离开今天页时浮现，点击平滑翻回初始页
+            // （全限定调用：外层 ColumnScope 的同名扩展在 Box 内不可用，需走顶层函数）
+            androidx.compose.animation.AnimatedVisibility(
+                visible = pagerState.currentPage != homePage,
+                enter = fadeIn() + scaleIn(initialScale = 0.6f),
+                exit = fadeOut() + scaleOut(targetScale = 0.6f),
+                modifier = Modifier.align(Alignment.BottomEnd).padding(20.dp),
+            ) {
+                Surface(
+                    onClick = { scope.launch { pagerState.animateScrollToPage(homePage) } },
+                    shape = RoundedCornerShape(999.dp),
+                    color = NagomiColors.accent,
+                    contentColor = Color.White,
+                    shadowElevation = 4.dp,
+                ) {
+                    Row(
+                        Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.Filled.Today, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("回到今天", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 日期芯片的紧凑文案：今天/昨天/明天直呼，「10/23 周五」取自完整标签后半段 */
+private fun chipLabel(slot: com.sparkhoward.nagomiani.core.online.WeeklyCalendar.Slot): String =
+    when {
+        slot.isToday -> "今天"
+        slot.label.startsWith("昨天") -> "昨天"
+        slot.label.startsWith("明天") -> "明天"
+        else -> slot.label.substringAfter(" · ")
+    }
+
+@Composable
+private fun DayStrip(
+    slots: List<com.sparkhoward.nagomiani.core.online.WeeklyCalendar.Slot>,
+    currentPage: Int,
+    homePage: Int,
+    onSelect: (Int) -> Unit,
+) {
+    val listState = rememberLazyListState()
+    LaunchedEffect(currentPage) {
+        if (currentPage in slots.indices) listState.animateScrollToItem(currentPage) // 选中芯片滚入可视区
+    }
+    LazyRow(
+        state = listState,
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        modifier = Modifier.padding(vertical = 3.dp),
+    ) {
+        items(slots.size) { index ->
+            val slot = slots[index]
+            val selected = index == currentPage
+            val bg = when {
+                selected -> NagomiColors.accent
+                index == homePage -> NagomiColors.accentSoft
+                else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+            }
+            val fg = when {
+                selected -> Color.White
+                index == homePage -> NagomiColors.accent
+                slot.isPast -> MaterialTheme.colorScheme.onSurfaceVariant
+                else -> MaterialTheme.colorScheme.onBackground
+            }
+            Text(
+                chipLabel(slot),
+                fontSize = 12.sp,
+                fontWeight = if (selected || index == homePage) FontWeight.SemiBold else FontWeight.Normal,
+                color = fg,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(bg)
+                    .clickable { onSelect(index) }
+                    .padding(horizontal = 10.dp, vertical = 5.dp),
+            )
+        }
+    }
+}
+
+/**
+ * 横向优先的翻页手势仲裁（配合 userScrollEnabled=false 的 Pager）。
+ * 默认轴向仲裁是「先越过触控斜率者赢」：横滑带一点弧度（纵向先过斜率）就被页内
+ * 纵向滚动抢走，翻页失败。这里改为累计位移过斜率后判定——横向位移不小于纵向即认领：
+ * 在 Initial pass 消费指针事件（内层 verticalScroll 看到已消费、不再滚动），用
+ * dispatchRawDelta 让页面跟手，抬手按位移比例与甩动速度翻页；判为纵向则完全不干预。
+ */
+private fun Modifier.dayPagerSwipe(
+    pagerState: androidx.compose.foundation.pager.PagerState,
+    pageWidthPx: Int,
+    scope: CoroutineScope,
+): Modifier = pointerInput(pagerState, pageWidthPx) {
+    val density = density
+    val flingPx = 50.dp.toPx() // 与系统 minimumFlingVelocity 同量级（50dp/s）
+    val tracker = androidx.compose.ui.input.pointer.util.VelocityTracker()
+    awaitEachGesture {
+        val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+        tracker.resetTracking()
+        var totalX = 0f
+        var totalY = 0f
+        var claimed = false
+        var swipeTotal = 0f // 认领后的横向累计（>0 朝后一页）
+        val slop = viewConfiguration.touchSlop * 1.5f
+        while (true) {
+            val event = awaitPointerEvent(PointerEventPass.Initial)
+            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+            if (!claimed) {
+                if (event.changes.any { it.isConsumed }) break // 被弹窗等接管，退出
+                totalX += change.positionChange().x
+                totalY += change.positionChange().y
+                if (!change.pressed) break // 原地点按：不干预，交给条目点击
+                if (abs(totalX) < slop && abs(totalY) < slop) continue
+                // 横向宽容度：横向达到纵向 75% 就认领翻页——默认「先过斜率者赢」
+                // 会让带弧度的横滑（纵向先起手）总被纵向滚动抢走
+                if (abs(totalX) < abs(totalY) * 0.75f) break
+                claimed = true
+            }
+            change.consume()
+            tracker.addPosition(change.uptimeMillis, change.position)
+            val dx = change.positionChange().x
+            swipeTotal += -dx
+            pagerState.dispatchRawDelta(-dx)
+            if (!change.pressed) {
+                val width = pageWidthPx.coerceAtLeast(1)
+                val progress = swipeTotal / width
+                val vx = tracker.calculateVelocity().x
+                val target = when {
+                    progress > 0.35f || (vx < -flingPx && progress > -0.4f) -> pagerState.currentPage + 1
+                    progress < -0.35f || (vx > flingPx && progress < 0.4f) -> pagerState.currentPage - 1
+                    else -> pagerState.currentPage
+                }.coerceIn(0, (pagerState.pageCount - 1).coerceAtLeast(0))
+                scope.launch { pagerState.animateScrollToPage(target) }
+                break
             }
         }
     }
@@ -190,24 +376,28 @@ private fun DaySection(slot: com.sparkhoward.nagomiani.core.online.WeeklyCalenda
             },
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
         )
-        LazyRow(
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        // 3 列海报网格：页面内部不做横向滚动——横向手势整体让给 Pager 翻页，
+        // 否则内层 LazyRow 会吃掉横滑，只有缝隙能切换上/下一天
+        Column(
+            Modifier.padding(horizontal = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            items(slot.day.items, key = { it.id }) { subject ->
-                SubjectCard(subject, onOpenDetail)
+            val rows = slot.day.items.chunked(3)
+            rows.forEach { rowItems ->
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    rowItems.forEach { subject ->
+                        SubjectCard(subject, onOpenDetail, Modifier.weight(1f))
+                    }
+                    repeat(3 - rowItems.size) { Spacer(Modifier.weight(1f)) } // 末行补位保持卡片等宽
+                }
             }
         }
     }
 }
 
 @Composable
-private fun SubjectCard(subject: Subject, onOpenDetail: (Int) -> Unit) {
-    Column(
-        Modifier
-            .width(110.dp)
-            .clickable { onOpenDetail(subject.id) },
-    ) {
+private fun SubjectCard(subject: Subject, onOpenDetail: (Int) -> Unit, modifier: Modifier = Modifier) {
+    Column(modifier.clickable { onOpenDetail(subject.id) }) {
         AsyncImage(
             model = subject.images?.bestURL(),
             contentDescription = subject.displayName,
@@ -221,7 +411,7 @@ private fun SubjectCard(subject: Subject, onOpenDetail: (Int) -> Unit) {
         Text(
             subject.displayName,
             fontSize = 12.sp,
-            // 固定占两行：短标题与长标题的卡片等高，横向拖动时行高不跳变（周历抖动根因）
+            // 固定占两行：短标题与长标题的卡片等高，网格内行高不跳变（周历抖动根因）
             minLines = 2,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,

@@ -57,33 +57,6 @@ class WeeklyCalendarTest {
     }
 
     @Test
-    fun twoDaySectionsAnchorTodayWithTomorrow() {
-        val today = LocalDate.of(2024, 1, 1) // 周一
-        val sections = WeeklyCalendar.twoDaySections(WeeklyCalendar.slots(today, allDays))
-        assertEquals(8, sections.size) // 15 槽 → 今天档 + 前侧 4 档（余 1 单独）+ 后侧 3 档
-        val todaySec = sections.first { sec -> sec.any { it.isToday } }
-        assertEquals(2, todaySec.size)
-        assertEquals(LocalDate.of(2024, 1, 1), todaySec[0].date) // 今天与明天同档
-        assertEquals(LocalDate.of(2024, 1, 2), todaySec[1].date)
-        // 升序贯穿所有档
-        assertEquals(slotsDates(sections), slotsDates(sections).sorted())
-    }
-
-    @Test
-    fun twoDaySectionsBeforeTodayPairFromNearestSide() {
-        val today = LocalDate.of(2024, 1, 1)
-        val sections = WeeklyCalendar.twoDaySections(WeeklyCalendar.slots(today, allDays))
-        // 最早 1 天单独成档（7 天为奇数），其余两两一档
-        assertEquals(1, sections[0].size)
-        assertEquals(LocalDate.of(2023, 12, 25), sections[0][0].date)
-        assertEquals(LocalDate.of(2023, 12, 26), sections[1][0].date)
-        assertEquals(LocalDate.of(2023, 12, 27), sections[1][1].date)
-    }
-
-    private fun slotsDates(sections: List<List<com.sparkhoward.nagomiani.core.online.WeeklyCalendar.Slot>>) =
-        sections.flatMap { it }.map { it.date.toEpochDay() }
-
-    @Test
     fun missingDaysAreSkipped() {
         val today = LocalDate.of(2024, 1, 1)
         val slots = WeeklyCalendar.slots(today, listOf(day(1), day(3)))

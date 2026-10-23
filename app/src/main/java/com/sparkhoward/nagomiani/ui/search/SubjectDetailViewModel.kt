@@ -49,11 +49,16 @@ class SubjectDetailViewModel(app: Application) : AndroidViewModel(app) {
         val myRate: Int? = null,
         val myComment: String? = null,
         val myEpStatus: Int? = null,
+        /** 收藏状态查询失败原因（401/网络错等）。null=查询成功（未收藏也是成功）——
+         *  不再吞错伪装成「未收藏」，让用户看得到为什么状态缺失 */
+        val collectionError: String? = null,
         /** 分集标记：本篇+SP 格子数据 / 已看分集 id 集 / 标记请求进行中（网格禁点防双击） */
         val episodes: List<Episode> = emptyList(),
         val episodesLoading: Boolean = false,
         val watchedEpisodeIds: Set<Int> = emptySet(),
         val episodeSaving: Boolean = false,
+        /** 分集/看过记录加载失败原因（不再静默吞成「没有看过标记」） */
+        val episodeMarksError: String? = null,
         val sourcesLoading: Boolean = false,
         val sourcesError: String? = null,
         /** 每站搜索结果概览（如「量子资源 2 · 极速资源 0 · 暴风资源 失败」） */
@@ -76,6 +81,15 @@ class SubjectDetailViewModel(app: Application) : AndroidViewModel(app) {
     private var current: Subject? = null
     /** 收藏修改世代：快速连点两个状态时，过期响应不得覆盖新选择 */
     private var collectionGeneration = 0
+    /** 登录用户名缓存（me() 只取一次；未设用户名时用 UID 数字）——收藏单条查询按名寻址 */
+    private var usernameCache: String? = null
+
+    /** 解析当前登录用户名；失败返回 null（token 过期/网络失败，由调用方亮出） */
+    private suspend fun resolveUsername(authed: BangumiApi): String? {
+        usernameCache?.let { return it }
+        val me = runCatching { authed.me() }.getOrNull() ?: return null
+        return me.username.ifBlank { me.id.toString() }.also { usernameCache = it }
+    }
 
     fun load(subjectID: Int) {
         // 同条目重进（播放器/登录页返回）：不整页重置——State(loading=true) 会把已渲染的
@@ -87,30 +101,47 @@ class SubjectDetailViewModel(app: Application) : AndroidViewModel(app) {
             state.value = state.value.copy(isLoggedIn = auth.isLoggedIn())
             if (sameSubject) {
                 loadBookmarked()
-                loadEpisodeMeta(subjectID)
-                // 收藏态也要刷新：播放器看完自动同步会补「在看」，静默重进不能让五态按钮停在旧状态
+                // 先刷新收藏再载分集：ep_status（看到第 N 集）是分集「已看」合并展示的输入之一
                 if (auth.isLoggedIn()) {
-                    runCatching {
+                    try {
                         val authed = BangumiApi { auth.refreshIfNeeded().accessToken }
-                        authed.myCollectionOf(subjectID)?.let { c ->
+                        val username = resolveUsername(authed)
+                            ?: throw BangumiError.Unauthorized() // me() 失败：按登录已过期亮出
+                        authed.myCollectionOf(username, subjectID)?.let { c ->
                             state.value = state.value.copy(
                                 myCollection = c.type.takeIf { t -> t > 0 },
                                 myRate = c.rate?.takeIf { it > 0 },
                                 myComment = c.comment,
                                 myEpStatus = c.epStatus,
+                                collectionError = null,
                             )
                         }
+                    } catch (e: Exception) {
+                        state.value = state.value.copy(
+                            collectionError = "收藏状态查询失败：${BangumiError.describe(e)}",
+                        )
                     }
                 }
+                loadEpisodeMeta(subjectID)
                 return@launch
             }
             try {
                 val authed = BangumiApi { auth.refreshIfNeeded().accessToken }
                 val subject = authed.subject(subjectID)
                 current = subject
-                var collection = if (auth.isLoggedIn()) {
-                    runCatching { authed.myCollectionOf(subjectID) }.getOrNull()
-                } else null
+                // 404（tryGet → null）才是确认未收藏；401/网络错等必须亮出来，
+                // 否则查询失败会被呈现成「未收藏」，用户明明登录着却查不到状态
+                var collection: com.sparkhoward.nagomiani.core.model.UserSubjectCollection? = null
+                var collectionError: String? = null
+                if (auth.isLoggedIn()) {
+                    try {
+                        val username = resolveUsername(authed)
+                            ?: throw BangumiError.Unauthorized()
+                        collection = authed.myCollectionOf(username, subjectID)
+                    } catch (e: Exception) {
+                        collectionError = "收藏状态查询失败：${BangumiError.describe(e)}"
+                    }
+                }
                 state.value = state.value.copy(
                     loading = false,
                     subject = subject,
@@ -118,6 +149,7 @@ class SubjectDetailViewModel(app: Application) : AndroidViewModel(app) {
                     myRate = collection?.rate?.takeIf { it > 0 },
                     myComment = collection?.comment,
                     myEpStatus = collection?.epStatus,
+                    collectionError = collectionError,
                 )
                 loadBookmarked()
                 loadEpisodeMeta(subjectID)
@@ -136,32 +168,53 @@ class SubjectDetailViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 分集元数据：已看徽章（登录时）+ 未放送门禁。分集表是公开端点，未登录也拉——门禁不依赖登录态 */
     private suspend fun loadEpisodeMeta(subjectID: Int) {
-        state.value = state.value.copy(episodesLoading = true)
+        state.value = state.value.copy(episodesLoading = true, episodeMarksError = null)
         try {
             val authed = BangumiApi { auth.refreshIfNeeded().accessToken }
             val eps = authed.allEpisodes(subjectID)
             // 放送日期以 JST 编排（与 Bangumi /calendar 一致），不能用设备本地"今天"判定，
             // 否则 JST 已开播而本地未到（如东九区以西）会多锁一天，反之会提前解锁
             val unaired = WeeklyAggregator.unairedAirdates(eps, java.time.LocalDate.now(java.time.ZoneId.of("Asia/Tokyo")))
-            val watched = if (auth.isLoggedIn()) {
-                runCatching { authed.myEpisodeCollections(subjectID) }.getOrDefault(emptyList())
-                    .filter { it.type == 2 }.mapNotNull { mark ->
-                        eps.firstOrNull { it.id == mark.episodeId }?.displaySort
-                    }.toSet()
-            } else emptySet()
-            val marks = if (auth.isLoggedIn()) {
-                runCatching { authed.myEpisodeCollections(subjectID) }.getOrDefault(emptyList())
-                    .filter { it.type == 2 }.map { it.episodeId }.toSet()
-            } else emptySet()
+            // 看过记录只拉一次（原来拉了两次）：watchedNumbers 给在线片源格子（集号），watchedEpisodeIds 给标记格子（分集 id）。
+            // 404 = 条目无分集记录/不可见（如私密收藏）：不算错误，「看到」进度会兜底展示
+            val marked = if (auth.isLoggedIn()) {
+                try {
+                    authed.myEpisodeCollections(subjectID).filter { it.type == 2 }
+                } catch (e: BangumiError.Http) {
+                    if (e.code != 404) {
+                        state.value = state.value.copy(
+                            episodeMarksError = "看过记录查询失败：${BangumiError.describe(e)}",
+                        )
+                    }
+                    emptyList()
+                } catch (e: Exception) {
+                    // 查询失败不等于「没看过」：亮出原因，格子照常渲染（只是没有已看标记）
+                    state.value = state.value.copy(
+                        episodeMarksError = "看过记录查询失败：${BangumiError.describe(e)}",
+                    )
+                    emptyList()
+                }
+            } else emptyList()
             val gridEps = eps.filter { it.type == 0 || it.type == 1 }.sortedBy { it.sort } // 本篇 + SP
+            // 「看过」与「看到」是两路独立信号：分集标记是逐集记录；ep_status 是收藏上的进度数字
+            // （网页端拖进度只改它、不生成分集记录，Bangumi 不保证两者同步）——
+            // 展示取并集：本篇集号 ≤ 看到进度 即视为已看，逐集标记在进度之外单独点亮（含 SP）
+            val epStatus = state.value.myEpStatus ?: 0
+            val epStatusWatched = eps.filter { it.type == 0 && it.displaySort <= epStatus }
+            val markedSorts = marked.mapNotNull { m -> eps.firstOrNull { it.id == m.episodeId }?.displaySort }
             state.value = state.value.copy(
-                watchedNumbers = watched,
+                watchedNumbers = (markedSorts + epStatusWatched.map { it.displaySort }).toSet(),
                 unairedEpisodes = unaired,
                 episodes = gridEps,
                 episodesLoading = false,
-                watchedEpisodeIds = marks,
+                watchedEpisodeIds = marked.map { it.episodeId }.toSet() + epStatusWatched.map { it.id },
             )
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            // 旧代码这里静默吞掉且不复位 episodesLoading——分集区永远转圈
+            state.value = state.value.copy(
+                episodesLoading = false,
+                episodeMarksError = "分集信息加载失败：${BangumiError.describe(e)}",
+            )
         }
     }
 
@@ -271,18 +324,22 @@ class SubjectDetailViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
             // 未收藏则补「在看」（未收藏条目 Bangumi 不允许标记单集看过）：不再仅限首次绑定，
-            // 覆盖"未登录时首播、登录后补看"漏收藏的场景；已有收藏状态不覆盖
+            // 覆盖"未登录时首播、登录后补看"漏收藏的场景；已有收藏状态不覆盖。
+            // myCollectionOf 只有确认未收藏（404）才返回 null，其余错误抛异常走 catch——
+            // 补收藏失败不阻断点播主流程
             if (auth.isLoggedIn()) {
                 current?.let { subject ->
-                    runCatching {
+                    try {
                         val authed = BangumiApi { auth.refreshIfNeeded().accessToken }
-                        if (authed.myCollectionOf(subject.id) == null) {
+                        val username = resolveUsername(authed)
+                        if (username != null && authed.myCollectionOf(username, subject.id) == null) {
                             authed.updateCollection(
                                 subject.id,
                                 CollectionModifyPayload(type = CollectionType.DOING.raw),
                             )
                             state.value = state.value.copy(myCollection = CollectionType.DOING.raw)
                         }
+                    } catch (_: Exception) {
                     }
                 }
             }

@@ -601,10 +601,14 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 确保条目已收藏（未收藏条目无法标记单集看过）：缺收藏时补「在看」，已有收藏状态不覆盖 */
+    /** 确保条目已收藏（未收藏条目无法标记单集看过）：缺收藏时补「在看」，已有收藏状态不覆盖。
+     *  查询走文档端点 /v0/users/{username}/collections/{id}（按名寻址，规格明示带 token
+     *  可见私密收藏）；me() 失败（token 过期/网络错）直接跳过——不误判成未收藏去覆盖 */
     private suspend fun ensureCollected(api: BangumiApi, subjectID: Int) {
         if (subjectID in confirmedCollected) return
-        if (api.myCollectionOf(subjectID) != null) {
+        val me = runCatching { api.me() }.getOrNull() ?: return
+        val username = me.username.ifBlank { me.id.toString() }
+        if (api.myCollectionOf(username, subjectID) != null) {
             confirmedCollected.add(subjectID)
         } else {
             api.updateCollection(subjectID, CollectionModifyPayload(type = CollectionType.DOING.raw))

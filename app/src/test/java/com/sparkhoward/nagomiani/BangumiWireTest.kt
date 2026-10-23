@@ -32,4 +32,24 @@ class BangumiWireTest {
         }.exceptionOrNull()
         assertTrue("期望 401（头通过检查），实际: $e") { e is BangumiError.Unauthorized }
     }
+
+    /** 真实「单条收藏」响应（/v0/users/{username}/collections/{id}，公开收藏无需 token）
+     *  必须能用应用同款 Json 配置无损解析——详情页收藏状态就靠它回显（type/rate/ep_status/comment） */
+    @Test fun parsesUserSubjectCollectionFromRealPayload() {
+        val text = javaClass.getResourceAsStream("/user_collection_sample.json")!!
+            .readBytes().decodeToString()
+        val json = kotlinx.serialization.json.Json {
+            ignoreUnknownKeys = true
+            isLenient = true
+            coerceInputValues = true
+            explicitNulls = false
+        }
+        val c = json.decodeFromString(
+            com.sparkhoward.nagomiani.core.model.UserSubjectCollection.serializer(),
+            text,
+        )
+        assertTrue("subject_id 应为 265，实际 ${c.subjectId}") { c.subjectId == 265 }
+        assertTrue("type 应为 2（看过），实际 ${c.type}") { c.type == 2 }
+        assertTrue("ep_status 不为负，实际 ${c.epStatus}") { c.epStatus >= 0 }
+    }
 }

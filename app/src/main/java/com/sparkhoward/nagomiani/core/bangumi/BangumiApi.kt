@@ -144,7 +144,13 @@ class BangumiApi(private val tokenProvider: suspend () -> String?) {
             json.encodeToString(CollectionModifyPayload.serializer(), payload),
         ).let { }
 
-    suspend fun myCollectionOf(subjectId: Int): UserSubjectCollection? = tryGet("/v0/users/-/collections/$subjectId")
+    /** 单条收藏：文档端点 GET /v0/users/{username}/collections/{subject_id}——规格明示
+     *  带 access token 可见私密收藏，未收藏返回 404 → null。
+     *  [username] 必须传 me() 的用户名（未设用户名时传 UID 数字），URL 转义同列表端点。
+     *  不用 /v0/users/-/… 的 GET：规格只给该路径定义了 POST/PATCH（GET 属未文档化表面），
+     *  实测对私密收藏等场景可能 404，静默呈现成「未收藏」无从排查 */
+    suspend fun myCollectionOf(username: String, subjectId: Int): UserSubjectCollection? =
+        tryGet("/v0/users/${java.net.URLEncoder.encode(username, "UTF-8")}/collections/$subjectId")
 
     // 注意：Bangumi v0 没有删除条目收藏的端点（DELETE 的官方 PR 因服务端软删除未实现被搁置，
     // 空体 POST 走的是 upsert——对未收藏条目会新建「在看」收藏），不要在这里加取消收藏方法

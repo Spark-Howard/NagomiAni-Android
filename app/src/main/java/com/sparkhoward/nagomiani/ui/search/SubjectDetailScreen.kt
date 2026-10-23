@@ -189,6 +189,15 @@ private fun DetailBody(state: SubjectDetailViewModel.State, viewModel: SubjectDe
                     modifier = Modifier.padding(top = 6.dp),
                 )
             }
+            // 收藏状态查询失败（401/网络错等）：不再吞错伪装成「未收藏」，如实亮出原因
+            state.collectionError?.let { err ->
+                Text(
+                    err,
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+            }
             // 我的评分 + 短评（已登录且已收藏时显示；Bangumi 1-10 分制 = 5 星 ×2）
             if (state.isLoggedIn && state.myCollection != null) {
                 // 草稿未动过时跟随服务端值（静默刷新不覆盖正在输入的内容）
@@ -304,6 +313,15 @@ private fun DetailBody(state: SubjectDetailViewModel.State, viewModel: SubjectDe
                 if (state.episodesLoading) {
                     CircularProgressIndicator(color = NagomiColors.accent, modifier = Modifier.padding(top = 10.dp).size(18.dp))
                 } else {
+                    // 分集/看过记录查询失败：亮出原因（不再静默显示成「没有看过标记」）
+                    state.episodeMarksError?.let { err ->
+                        Text(
+                            err,
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.padding(top = 4.dp),
+                        )
+                    }
                     var episodesExpanded by remember { mutableStateOf(false) }
                     val shown = if (episodesExpanded) state.episodes else state.episodes.take(30)
                     shown.chunked(5).forEach { rowEps ->

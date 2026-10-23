@@ -37,6 +37,8 @@ class NagomiApp : Application(), ImageLoaderFactory {
         createDownloadChannel()
         createUpdateNotifyChannel()
         createDailyAiringChannel()
+        // 小部件后台刷新周期任务（幂等注册，KEEP 不重置周期；重启后 WorkManager 自动恢复）
+        com.sparkhoward.nagomiani.ui.widget.WidgetRefreshWorker.ensureScheduled(this)
     }
 
     /** 离线缓存下载服务的前台通知渠道 */

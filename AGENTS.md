@@ -61,9 +61,10 @@ app/src/main/java/com/sparkhoward/nagomiani/
 - **集数标记**：`markEpisodes` type=2 标记 / 0 取消，批量 300/批防请求体过大；ep_status 对账
   **只增不减**（`syncEpStatus`，不覆盖用户手动回退的进度）。
 - **放送日/周历一律用 JST**（`ZoneId.of("Asia/Tokyo")`）：Bangumi 按日本时区编排，用本地时区会在
-  跨天时段错位一天。周历语义 = 「近 7 天 + 未来 7 天」窗口（±7 天、日期升序、UI 初始滚动定位今天，
+  跨天时段错位一天。周历语义 = 「近 7 天 + 未来 7 天」窗口（±7 天、日期升序、UI 初始定位今天，
   `WeeklyCalendar`），不要回退成回溯式裸星期或只显示未来的单向窗口。
-  搜索页展示为**两天一档**（`twoDaySections`：今天+明天成档为初始定位）。
+  搜索页周历为**一天一页**的横滑 Pager（`HorizontalPager`：初始页=今天，右下角「回到今天」；
+  页面内不做横向滚动——内层横滑元素会抢翻页手势，每天用 3 列海报网格）。
 - **AppStore 范式**：结构化数据用 `@Serializable` + JSON 字符串键；可测的纯逻辑抽成 object
   （参考 `DanmakuLayout`/`HistoryStats`/`WeeklyCalendar` 的 measure 注入/纯函数分区），
   测试用 kotlin.test 平铺断言。**DataStore 的 `edit{}` 块内绝不能再读同一个文件**（持锁重入）——
@@ -87,12 +88,9 @@ app/src/main/java/com/sparkhoward/nagomiani/
 
 ## 当前状态
 
-- 最新发布 **v0.3.0**（截图分享卡、片源测速与健康面板、断流自动换线、周历语义修复）。
-- v0.4.0 待发版内容（在 v0.3.0 全量功能之上）：
-  观看历史+统计（番库页「历史 · 统计 ›」入口 + `core/history/` + `player.history.json` 本地积累 +
-  年度热力图 + 数据备份 `core/backup/Backup`）、
-  桌面小部件 ×2 与长按快捷方式（`ui/widget/` + `WidgetIntents.route` deeplink）、
-  今日更新提醒（`core/notify/DailyAiringNotifier`：放送表 × 在看收藏，JST 日期基线每日一次）、
-  集数标记 + 收藏评分短评（详情页）、收藏列表增强（全量翻页/排序/进度条/+1）。
-- 单元测试 92 项，全部纯 JVM（无 robolectric），新增可测逻辑请照 `HistoryStatsTest`/
+- 最新发布 **v0.5.0**（周历横滑 Pager 一天一页 + 日期条 + 横向优先手势仲裁、
+  详情页收藏/分集正确性修复——收藏查询走文档端点 `/v0/users/{username}/collections/{id}`、
+  「看过」分集标记与「看到」ep_status 合并展示、查询失败可视化、死会话自愈、
+  小部件 WorkManager 每小时后台刷新 `WidgetRefreshWorker`）。
+- 单元测试 91 项，全部纯 JVM（无 robolectric），新增可测逻辑请照 `HistoryStatsTest`/
   `SourceHealthTest` 风格补测试。
