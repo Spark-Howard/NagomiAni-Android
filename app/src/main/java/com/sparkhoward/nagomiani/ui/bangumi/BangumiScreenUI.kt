@@ -6,6 +6,8 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -13,6 +15,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -36,6 +39,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -140,6 +145,31 @@ fun BangumiScreen(
                         )
                     }
                 }
+                // 今日更新提醒开关（DailyAiringNotifier 每日检查在看的新番是否更新）
+                item {
+                    val notifyOn by viewModel.notifyEnabled.collectAsState()
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(stringResource(com.sparkhoward.nagomiani.R.string.notify_toggle_label), fontSize = 13.sp)
+                            Text(
+                                stringResource(com.sparkhoward.nagomiani.R.string.notify_toggle_hint),
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        androidx.compose.material3.Switch(
+                            checked = notifyOn,
+                            onCheckedChange = { viewModel.toggleNotify(it) },
+                            colors = androidx.compose.material3.SwitchDefaults.colors(checkedTrackColor = NagomiColors.accent),
+                            modifier = Modifier.height(26.dp),
+                        )
+                    }
+                }
                 item {
                     NagomiSegmented(
                         options = CollectionType.entries.toList(),
@@ -148,6 +178,29 @@ fun BangumiScreen(
                         onSelect = viewModel::selectType,
                         modifier = Modifier.padding(horizontal = 16.dp),
                     )
+                }
+                // 排序 + 部数汇总（横向可滚：窄屏上四个排序胶囊放不下一行）
+                item {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState())
+                            .padding(horizontal = 16.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        NagomiSegmented(
+                            options = BangumiViewModel.Sort.entries.toList(),
+                            selected = state.sort,
+                            label = { it.label },
+                            onSelect = viewModel::setSort,
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            if (state.collectionsLoading) "" else "${state.collections.size} 部",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
                 if (state.collectionsLoading) {
                     item {
@@ -177,7 +230,7 @@ fun BangumiScreen(
                         )
                     }
                 }
-                items(state.collections, key = { it.subjectId }) { collection ->
+                items(viewModel.displayed(), key = { it.subjectId }) { collection ->
                     val subject = collection.subject
                     Row(
                         Modifier
@@ -208,6 +261,38 @@ fun BangumiScreen(
                                 fontSize = 12.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
+                            // 观看进度条（总集数已知时）
+                            val total = subject?.episodeCount
+                            if (total != null && total > 0) {
+                                androidx.compose.material3.LinearProgressIndicator(
+                                    progress = { (collection.epStatus.toFloat() / total).coerceIn(0f, 1f) },
+                                    color = NagomiColors.accent,
+                                    trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(top = 5.dp)
+                                        .height(3.dp)
+                                        .clip(RoundedCornerShape(999.dp)),
+                                )
+                            }
+                        }
+                        // 「+1」快捷推进（仅在看 Tab 且未看完的行）：看完最新一集一键 +1
+                        val totalEps = subject?.episodeCount
+                        val canAdvance = state.selected == CollectionType.DOING &&
+                            (totalEps == null || collection.epStatus < totalEps)
+                        if (canAdvance) {
+                            val rowUpdating by viewModel.rowUpdating.collectAsState()
+                            Box(
+                                Modifier
+                                    .padding(start = 8.dp)
+                                    .size(32.dp)
+                                    .clip(CircleShape)
+                                    .background(NagomiColors.accent.copy(alpha = 0.15f))
+                                    .clickable(enabled = !rowUpdating) { viewModel.advanceEpisode(collection) },
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text("+1", fontSize = 12.sp, color = NagomiColors.accent, fontWeight = FontWeight.Bold)
+                            }
                         }
                     }
                 }

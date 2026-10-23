@@ -159,6 +159,7 @@ data class UserSubjectCollection(
     @SerialName("ep_status") val epStatus: Int = 0,
     @SerialName("vol_status") val volStatus: Int = 0,
     @SerialName("updated_at") val updatedAt: String? = null,
+    val comment: String? = null,
     val subject: Subject? = null,
 )
 

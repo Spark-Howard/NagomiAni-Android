@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Search
@@ -24,8 +25,12 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -41,11 +46,10 @@ import com.sparkhoward.nagomiani.ui.theme.NagomiBadge
 import com.sparkhoward.nagomiani.ui.theme.NagomiColors
 import com.sparkhoward.nagomiani.ui.theme.NagomiSectionHeader
 
-/** 搜索页：搜索框 + 结果列表；无关键词时展示"新番放送（今天起一周）"周历 */
+/** 搜索页：搜索框 + 结果列表；无关键词时展示"新番放送（近一周 · 未来一周）"周历 */
 @Composable
 fun SearchScreen(
     onOpenDetail: (Int) -> Unit,
-    onPlay: () -> Unit,
     viewModel: SearchViewModel = viewModel(),
 ) {
     val state by viewModel.state.collectAsState()
@@ -110,13 +114,24 @@ fun SearchScreen(
 
 @Composable
 private fun WeeklySection(state: SearchViewModel.State, viewModel: SearchViewModel, onOpenDetail: (Int) -> Unit) {
-    LazyColumn(Modifier.fillMaxSize()) {
+    val listState = rememberLazyListState()
+    // 首次载入定位到「今天」：窗口是近 7 天 + 未来 7 天（日期升序），今天在中间约第 8 组；
+    // 手动刷新不重新定位（用户可能正停在别处回看）
+    var anchoredToToday by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(state.weekly) {
+        if (!anchoredToToday && state.weekly.isNotEmpty()) {
+            anchoredToToday = true
+            val index = state.weekly.indexOfFirst { it.isToday }
+            if (index >= 0) listState.scrollToItem(index)
+        }
+    }
+    LazyColumn(Modifier.fillMaxSize(), state = listState) {
         item {
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                NagomiSectionHeader("新番放送（今天起一周）", Icons.Filled.Search, Modifier.weight(1f))
+                NagomiSectionHeader("新番放送（近一周 · 未来一周）", Icons.Filled.Search, Modifier.weight(1f))
                 state.weeklyFetchedAt?.let {
                     Text("更新于 $it", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
@@ -151,7 +166,12 @@ private fun DaySection(slot: com.sparkhoward.nagomiani.core.online.WeeklyCalenda
         Text(
             slot.label,
             style = MaterialTheme.typography.titleMedium,
-            color = if (slot.isToday) NagomiColors.accent else MaterialTheme.colorScheme.onBackground,
+            // 今天高亮、未来常规、过去（已放送）次级色弱化
+            color = when {
+                slot.isToday -> NagomiColors.accent
+                slot.isPast -> MaterialTheme.colorScheme.onSurfaceVariant
+                else -> MaterialTheme.colorScheme.onBackground
+            },
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
         )
         LazyRow(

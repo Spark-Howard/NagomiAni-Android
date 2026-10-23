@@ -146,6 +146,9 @@ class BangumiApi(private val tokenProvider: suspend () -> String?) {
 
     suspend fun myCollectionOf(subjectId: Int): UserSubjectCollection? = tryGet("/v0/users/-/collections/$subjectId")
 
+    // 注意：Bangumi v0 没有删除条目收藏的端点（DELETE 的官方 PR 因服务端软删除未实现被搁置，
+    // 空体 POST 走的是 upsert——对未收藏条目会新建「在看」收藏），不要在这里加取消收藏方法
+
     // MARK: - OAuth
 
     suspend fun exchangeToken(

@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 长按图标静态快捷方式：直达三个主 Tab（route extra 由 MainActivity 解析导航） -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="search"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_search"
+        android:shortcutShortLabel="@string/tab_search"
+        android:shortcutLongLabel="@string/tab_search">
+        <intent
+            android:action="com.sparkhoward.nagomiani.OPEN_ROUTE"
+            android:targetPackage="com.sparkhoward.nagomiani"
+            android:targetClass="com.sparkhoward.nagomiani.MainActivity">
+            <extra
+                android:name="route"
+                android:value="search" />
+        </intent>
+    </shortcut>
+    <shortcut
+        android:shortcutId="history"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_history"
+        android:shortcutShortLabel="@string/tab_history"
+        android:shortcutLongLabel="@string/tab_history">
+        <intent
+            android:action="com.sparkhoward.nagomiani.OPEN_ROUTE"
+            android:targetPackage="com.sparkhoward.nagomiani"
+            android:targetClass="com.sparkhoward.nagomiani.MainActivity">
+            <extra
+                android:name="route"
+                android:value="history" />
+        </intent>
+    </shortcut>
+    <shortcut
+        android:shortcutId="bangumi"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_bangumi"
+        android:shortcutShortLabel="@string/tab_bangumi"
+        android:shortcutLongLabel="@string/tab_bangumi">
+        <intent
+            android:action="com.sparkhoward.nagomiani.OPEN_ROUTE"
+            android:targetPackage="com.sparkhoward.nagomiani"
+            android:targetClass="com.sparkhoward.nagomiani.MainActivity">
+            <extra
+                android:name="route"
+                android:value="bangumi" />
+        </intent>
+    </shortcut>
+</shortcuts>

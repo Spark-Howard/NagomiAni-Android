@@ -1,7 +1,7 @@
 package com.sparkhoward.nagomiani
 
 import com.sparkhoward.nagomiani.core.dandanplay.DandanplayApi
-import com.sparkhoward.nagomiani.core.maccms.HtmlEntities
+import com.sparkhoward.nagomiani.core.danmaku.HtmlEntities
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals

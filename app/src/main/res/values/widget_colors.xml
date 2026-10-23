@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 小部件专用色值：与 Compose 侧 NagomiColors（Theme.kt）同值双份维护——
+     Compose 常量 XML 引用不到，改主题时两边都要同步（AGENTS.md 有记录） -->
+<resources>
+    <color name="widget_accent">#EC6A88</color>
+    <color name="widget_bg">#FFF7F9</color>
+    <color name="widget_text_primary">#2A2124</color>
+    <color name="widget_text_secondary">#8A7580</color>
+    <color name="widget_hairline">#26EC6A88</color>
+</resources>

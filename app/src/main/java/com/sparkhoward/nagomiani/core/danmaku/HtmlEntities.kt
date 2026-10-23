@@ -1,4 +1,4 @@
-package com.sparkhoward.nagomiani.core.maccms
+package com.sparkhoward.nagomiani.core.danmaku
 
 /**
  * HTML 实体解码（MacCMS 站点数据常用数值/十六进制实体，且存在双重转义）。

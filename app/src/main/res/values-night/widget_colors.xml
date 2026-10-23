@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 深色模式小部件色值（与 NagomiColors 深色侧同值） -->
+<resources>
+    <color name="widget_bg">#20181B</color>
+    <color name="widget_text_primary">#F5EDEF</color>
+    <color name="widget_text_secondary">#B39DA8</color>
+    <color name="widget_hairline">#33EC6A88</color>
+</resources>

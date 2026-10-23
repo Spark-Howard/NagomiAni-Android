@@ -51,4 +51,29 @@ class CollectionPayloadTest {
         assertEquals(4, com.sparkhoward.nagomiani.core.model.CollectionType.ON_HOLD.raw)
         assertEquals(5, com.sparkhoward.nagomiani.core.model.CollectionType.DROPPED.raw)
     }
+
+    @Test fun epStatusAdvanceKeepsTypeAndOmitsRate() {
+        // 收藏行「+1」/分集 ep_status 对账：只带 type（保持五态不变）+ ep_status，
+        // 不得默认带 rate（0=删评分）与 vol_status（书籍专用，动画误发可能 400）
+        assertEquals(
+            """{"type":3,"ep_status":7}""",
+            json.encodeToString(CollectionModifyPayload.serializer(), CollectionModifyPayload(type = 3, epStatus = 7)),
+        )
+    }
+
+    @Test fun ratingSaveOmitsRateWhenNull() {
+        // 只存短评（未打星）：rate=null 必须省略——绝不能落成 rate=0（删除评分语义）
+        assertEquals(
+            """{"type":3,"comment":"好"}""",
+            json.encodeToString(CollectionModifyPayload.serializer(), CollectionModifyPayload(type = 3, rate = null, comment = "好")),
+        )
+    }
+
+    @Test fun commentClearUsesEmptyStringNotOmission() {
+        // 清空短评保存 = 显式空串（省略字段是「不动」语义，无法清除）
+        assertEquals(
+            """{"type":3,"comment":""}""",
+            json.encodeToString(CollectionModifyPayload.serializer(), CollectionModifyPayload(type = 3, comment = "")),
+        )
+    }
 }

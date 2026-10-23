@@ -1,4 +1,28 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">NagomiAni</string>
+
+    <!-- 桌面小部件 -->
+    <string name="widget_today_title">🌸 今日新番</string>
+    <string name="widget_today_desc">今天更新的新番一览（Bangumi 放送表），点条目直达详情</string>
+    <string name="widget_stats_title">🌸 观看统计</string>
+    <string name="widget_stats_desc">总观看时长/看过番数/看完集数与近 7 日分布</string>
+    <string name="widget_stats_total_label">总时长</string>
+    <string name="widget_stats_shows_label">看过番剧</string>
+    <string name="widget_stats_finished_label">看完集数</string>
+    <string name="widget_refresh">刷新</string>
+    <string name="widget_loading">正在加载今日放送…</string>
+    <string name="widget_today_empty">今天没有查到新番数据</string>
+    <string name="widget_today_failed">加载失败，点右上角刷新重试</string>
+
+    <!-- 主 Tab（快捷方式标签） -->
+    <string name="tab_search">搜索新番</string>
+    <string name="tab_history">观看历史</string>
+    <string name="tab_bangumi">我的追番</string>
+
+    <!-- 今日更新提醒 -->
+    <string name="notify_channel_name">今日更新提醒</string>
+    <string name="notify_title">🌸 今日新番更新</string>
+    <string name="notify_toggle_label">今日更新提醒</string>
+    <string name="notify_toggle_hint">每天检查一次在看的新番是否更新</string>
 </resources>
