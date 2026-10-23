@@ -125,7 +125,8 @@ private fun WeeklySection(state: SearchViewModel.State, viewModel: SearchViewMod
         if (!anchoredToToday && sections.isNotEmpty()) {
             anchoredToToday = true
             val index = sections.indexOfFirst { sec -> sec.any { it.isToday } }
-            if (index >= 0) listState.scrollToItem(index)
+            // LazyColumn 第 0 项是周历标题行，档位 item 从 1 起——定位要 +1 才落在含今天的档
+            if (index >= 0) listState.scrollToItem(index + 1)
         }
     }
     LazyColumn(Modifier.fillMaxSize(), state = listState) {
