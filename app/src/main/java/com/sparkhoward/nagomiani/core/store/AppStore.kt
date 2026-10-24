@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.doublePreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
@@ -29,6 +30,7 @@ class AppStore(private val context: Context) {
 
     private object Keys {
         val autoplayNext = booleanPreferencesKey("player.autoplayNext")
+        val playerSpeed = floatPreferencesKey("player.speed")                 // 跨集/重启记忆的倍速
         val danmakuEnabled = booleanPreferencesKey("player.danmakuEnabled")
         val danmakuFontSize = doublePreferencesKey("danmaku.fontSize")
         val danmakuFontScaled = booleanPreferencesKey("danmaku.fontSizeScaled")
@@ -56,6 +58,8 @@ class AppStore(private val context: Context) {
     // MARK: - 播放器设置
 
     val autoplayNext: Flow<Boolean> = context.dataStore.data.map { it[Keys.autoplayNext] ?: true }
+    /** 倍速记忆（长按 3× 快进为临时变速，不写此键） */
+    val playerSpeed: Flow<Float> = context.dataStore.data.map { it[Keys.playerSpeed] ?: 1.0f }
     val danmakuEnabled: Flow<Boolean> = context.dataStore.data.map { it[Keys.danmakuEnabled] ?: true }
     /** 弹幕字号（sp）。默认 14；danmakuFontScaled 标记旧值（18/22/28 预设）是否已迁移到新刻度 */
     val danmakuFontSize: Flow<Double> = context.dataStore.data.map { it[Keys.danmakuFontSize] ?: 14.0 }
@@ -65,6 +69,7 @@ class AppStore(private val context: Context) {
     val danmakuOpacity: Flow<Double> = context.dataStore.data.map { it[Keys.danmakuOpacity] ?: 1.0 }
 
     suspend fun setAutoplayNext(value: Boolean) = edit { it[Keys.autoplayNext] = value }
+    suspend fun setPlayerSpeed(value: Float) = edit { it[Keys.playerSpeed] = value }
     suspend fun setDanmakuEnabled(value: Boolean) = edit { it[Keys.danmakuEnabled] = value }
     suspend fun setDanmakuFontSize(value: Double) = edit { it[Keys.danmakuFontSize] = value }
     suspend fun markDanmakuFontScaled() = edit { it[Keys.danmakuFontScaled] = true }

@@ -196,6 +196,14 @@ fun PlayerScreen(
     // 弹幕控制器（外层声明：覆盖层与设置弹层分处两层布局，都要用）
     val controller = danmakuController
 
+    // 播放中屏幕常亮：暂停或离开播放器页（dispose）时交还系统超时；
+    // 小窗态本页已销毁、画中画由系统接管，均不受影响
+    DisposableEffect(state.isPlaying) {
+        val window = activity?.window
+        if (state.isPlaying) window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        onDispose { window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
+    }
+
     var controlsVisible by remember { mutableStateOf(true) }
     var isSeeking by remember { mutableStateOf(false) }
     var seekPreview by remember { mutableStateOf(0.0) }
@@ -290,7 +298,8 @@ fun PlayerScreen(
                                 if (!inPip && state.isPlaying && !boosting) {
                                     boostBaseSpeed = viewModel.speed.value
                                     boosting = true
-                                    viewModel.setSpeed(3f)
+                                    // 临时变速不落盘（persist=false），抬手还原基速
+                                    viewModel.setSpeed(3f, persist = false)
                                 }
                             },
                             onPress = {
@@ -298,7 +307,7 @@ fun PlayerScreen(
                                 // 长按快进在抬手时还原用户倍速（快进中离开页面由 dispose 兜底）
                                 if (boosting) {
                                     boosting = false
-                                    viewModel.setSpeed(boostBaseSpeed)
+                                    viewModel.setSpeed(boostBaseSpeed, persist = false)
                                 }
                             },
                         )
@@ -675,6 +684,7 @@ fun PlayerScreen(
                     controller = controller!!,
                     settings = danmakuSettings,
                     onUpdate = { transform -> viewModel.updateDanmakuSettings(transform) },
+                    onRefetch = { viewModel.refetchDanmaku() },
                     onDismiss = { showDanmakuSheet = false },
                 )
             }

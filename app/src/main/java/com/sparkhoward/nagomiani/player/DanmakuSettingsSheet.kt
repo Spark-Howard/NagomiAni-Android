@@ -16,9 +16,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -37,17 +34,18 @@ private val LabelColor = Color.White.copy(alpha = 0.65f)
 /**
  * 弹幕设置半透明列表（非模态覆盖层，从底部滑出）：
  * 视频与弹幕不受任何影响（无遮罩变暗）；点列表外任意处或「完成」收起。
- * 弹幕开关 / 字号 / 颜色（三模式+色板）/ 不透明度 / 状态 / 重新获取。改动即时回调持久化。
+ * 弹幕开关 / 字号 / 颜色（三模式+色板）/ 不透明度 / 状态 / 重新获取（忽略缓存重拉本集）。
+ * 改动即时回调持久化；「重新获取」后的匹配/拉取进度由状态行的 statusText 实时反馈。
  */
 @Composable
 fun DanmakuSettingsSheet(
     controller: DanmakuController,
     settings: DanmakuSettings,
     onUpdate: ((DanmakuSettings) -> DanmakuSettings) -> Unit,
+    onRefetch: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val state by controller.state.collectAsState()
-    var showRefetchHint by remember { mutableStateOf(false) }
     val enabled = settings.enabled
     val fontSize = settings.fontSize
     val colorMode = settings.colorMode
@@ -166,13 +164,13 @@ fun DanmakuSettingsSheet(
                     "重新获取",
                     color = NagomiColors.accent,
                     fontSize = 12.sp,
-                    modifier = Modifier.clickable { showRefetchHint = true },
+                    modifier = Modifier.clickable { onRefetch() },
                 )
             }
         }
 
         Text(
-            "弹幕来自弹弹play：在线番按剧名+集号自动匹配，找不到不显示（宁缺毋滥）。" + if (showRefetchHint) "（回到本集重新进入播放器即重新获取）" else "",
+            "弹幕来自弹弹play：在线番按剧名+集号自动匹配，找不到不显示（宁缺毋滥）。",
             fontSize = 10.sp,
             color = Color.White.copy(alpha = 0.55f),
             modifier = Modifier.padding(top = 4.dp),

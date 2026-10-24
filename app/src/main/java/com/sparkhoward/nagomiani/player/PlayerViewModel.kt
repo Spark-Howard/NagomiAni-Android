@@ -18,6 +18,7 @@ import android.widget.FrameLayout
 import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
@@ -98,6 +99,13 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             store.autoplayNext.collect { autoplayNext.value = it }
         }
+        viewModelScope.launch {
+            // 倍速记忆：跨集/重启恢复（本机 setSpeed 写回后回流到此，幂等）
+            store.playerSpeed.collect { value ->
+                speed.value = value
+                exoPlayer?.setPlaybackSpeed(value)
+            }
+        }
     }
 
     // MARK: - 竖屏功能面板（选集 / 倍速 / 线路 / 连播 / 缓存本集）
@@ -150,9 +158,11 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun setSpeed(value: Float) {
+    /** 倍速：persist=false 供长按 3× 快进的临时变速（不落盘，抬手还原基速——中途杀进程也不会记住 3×） */
+    fun setSpeed(value: Float, persist: Boolean = true) {
         speed.value = value
         exoPlayer?.setPlaybackSpeed(value)
+        if (persist) viewModelScope.launch { store.setPlayerSpeed(value) }
     }
 
     fun toggleAutoplayNext() {
@@ -272,6 +282,17 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
 
         val context = getApplication<Application>()
         val p = player ?: ExoPlayer.Builder(context).build().also {
+            // 音频焦点：来电/其他应用播音频自动暂停让路（瞬时丢失结束后自动恢复），
+            // 拔耳机暂停（becoming noisy）——平台原生行为，Media3 全权处理
+            it.setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(C.USAGE_MEDIA)
+                    .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+                    .build(),
+                /* handleAudioFocus = */ true,
+            )
+            it.setHandleAudioBecomingNoisy(true)
+            it.setPlaybackSpeed(speed.value)
             exoPlayer = it
             it.addListener(playerListener)
         }
@@ -649,6 +670,14 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         val controller = danmaku.value ?: return
         val title = item.showTitle ?: return
         controller.prepare(item.resumeKey, showTitle = title, episodeNumber = item.episodeNumber)
+    }
+
+    /** 弹幕设置弹层「重新获取」：忽略内存缓存重拉本集弹幕（DanmakuController.refetch） */
+    fun refetchDanmaku() {
+        val item = playback ?: return
+        val controller = danmaku.value ?: return
+        val title = item.showTitle ?: return
+        controller.refetch(item.resumeKey, title, item.episodeNumber)
     }
 
     // MARK: - 离线补同步
