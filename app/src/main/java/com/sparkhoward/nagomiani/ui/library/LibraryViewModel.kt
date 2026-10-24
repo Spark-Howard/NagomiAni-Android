@@ -154,15 +154,14 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { store.setUpdateNotifyEnabled(!updateNotify.value) }
     }
 
-    fun refresh() {
-        viewModelScope.launch {
-            // loading 置位 + 分步发布：否则多秒刷新期间列表空白，还会误渲染"还没有云端番"空态
-            state.value = state.value.copy(loading = true)
-            val items = buildContinueItems()
-            state.value = state.value.copy(continueItems = items, loading = false)
-            val rows = buildCloudRows()
-            state.value = state.value.copy(cloudRows = rows)
-        }
+    /** 返回 Job 供下拉刷新等待完成（指示器只对用户主动刷新显示，进页自动刷新不闪） */
+    fun refresh(): kotlinx.coroutines.Job = viewModelScope.launch {
+        // loading 置位 + 分步发布：否则多秒刷新期间列表空白，还会误渲染"还没有云端番"空态
+        state.value = state.value.copy(loading = true)
+        val items = buildContinueItems()
+        state.value = state.value.copy(continueItems = items, loading = false)
+        val rows = buildCloudRows()
+        state.value = state.value.copy(cloudRows = rows)
     }
 
     private suspend fun buildContinueItems(): List<ContinueItem> {

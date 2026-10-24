@@ -7,6 +7,12 @@ import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -299,6 +305,11 @@ private fun NagomiNavHost(routeRequest: androidx.compose.runtime.MutableState<Ro
             NavHost(
                 navController = navController,
                 startDestination = Routes.SEARCH,
+                // 默认转场从约 700ms 淡入淡出收紧到 220ms：页面切换更跟手（各路由可单独覆盖）
+                enterTransition = { fadeIn(tween(220)) },
+                exitTransition = { fadeOut(tween(220)) },
+                popEnterTransition = { fadeIn(tween(220)) },
+                popExitTransition = { fadeOut(tween(220)) },
             ) {
                 composable(Routes.SEARCH) {
                     SearchScreen(onOpenDetail = { navController.navigate(Routes.detail(it)) }, onPlay = { navController.navigate(Routes.PLAYER) })
@@ -325,6 +336,9 @@ private fun NagomiNavHost(routeRequest: androidx.compose.runtime.MutableState<Ro
                 composable(
                     Routes.DETAIL,
                     arguments = listOf(navArgument("subjectID") { }),
+                    // 详情从右滑入、返回滑出（与层级方向一致），其余转场走默认淡入淡出
+                    enterTransition = { slideInHorizontally(tween(300)) { it } },
+                    popExitTransition = { slideOutHorizontally(tween(300)) { it } },
                 ) { entry ->
                     val subjectID = entry.arguments?.getString("subjectID")?.toIntOrNull() ?: 0
                     SubjectDetailScreen(
@@ -335,7 +349,9 @@ private fun NagomiNavHost(routeRequest: androidx.compose.runtime.MutableState<Ro
                 }
                 composable(
                     Routes.PLAYER,
+                    // 进入从底部滑入（播放器是内容之上的覆盖层级）；
                     // 返回/进小窗立即消失：默认约 700ms 的淡出会让视频画面滞留一秒
+                    enterTransition = { slideInVertically(tween(300)) { it } },
                     exitTransition = { androidx.compose.animation.ExitTransition.None },
                     popExitTransition = { androidx.compose.animation.ExitTransition.None },
                     popEnterTransition = { androidx.compose.animation.EnterTransition.None },

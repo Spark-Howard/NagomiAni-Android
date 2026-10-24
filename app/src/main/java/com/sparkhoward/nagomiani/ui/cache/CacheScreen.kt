@@ -46,10 +46,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.media3.exoplayer.offline.Download
-import coil.compose.AsyncImage
 import com.sparkhoward.nagomiani.AppGraph
 import com.sparkhoward.nagomiani.core.download.DownloadUtil
 import com.sparkhoward.nagomiani.player.PlaybackBus
+import com.sparkhoward.nagomiani.ui.theme.NagomiAsyncImage
 import com.sparkhoward.nagomiani.ui.theme.NagomiColors
 import com.sparkhoward.nagomiani.ui.theme.NagomiSectionHeader
 
@@ -301,10 +301,9 @@ private fun CacheRowItem(
             }
             Spacer(Modifier.width(8.dp))
         }
-        AsyncImage(
+        NagomiAsyncImage(
             model = row.coverURL,
             contentDescription = null,
-            contentScale = androidx.compose.ui.layout.ContentScale.Crop,
             modifier = Modifier
                 .width(44.dp)
                 .aspectRatio(0.7f)

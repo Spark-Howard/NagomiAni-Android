@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
@@ -39,6 +40,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -54,14 +56,16 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import coil.compose.AsyncImage
 import com.sparkhoward.nagomiani.core.download.DownloadUtil
+import kotlinx.coroutines.launch
 import com.sparkhoward.nagomiani.core.model.OnlineEpisode
+import com.sparkhoward.nagomiani.ui.theme.NagomiAsyncImage
 import com.sparkhoward.nagomiani.ui.theme.NagomiBadge
 import com.sparkhoward.nagomiani.ui.theme.NagomiColors
 import com.sparkhoward.nagomiani.ui.theme.NagomiSectionHeader
 
 /** 番库页：继续观看卡片横排 + 云端番库列表（展开分集点播） */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LibraryScreen(
     onOpenDetail: (Int) -> Unit,
@@ -78,6 +82,17 @@ fun LibraryScreen(
     // 每次回到番库页都重读数据：详情页新收藏/继续观看的进展要及时反映
     androidx.compose.runtime.LaunchedEffect(Unit) { viewModel.refresh() }
 
+    // 下拉刷新整个番库（继续观看 + 云端番库一并重读）；指示器只对主动下拉显示，
+    // 进页自动刷新不闪（refresh 返回 Job 供等待）
+    var pullRefreshing by remember { mutableStateOf(false) }
+    val pullScope = androidx.compose.runtime.rememberCoroutineScope()
+    PullToRefreshBox(
+        isRefreshing = pullRefreshing,
+        onRefresh = {
+            pullRefreshing = true
+            pullScope.launch { viewModel.refresh().join(); pullRefreshing = false }
+        },
+    ) {
     LazyColumn(Modifier.fillMaxSize()) {
         item {
             Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -177,6 +192,7 @@ fun LibraryScreen(
         }
         item { Spacer(Modifier.size(24.dp)) }
     }
+    }
 
     // 取消收藏确认弹窗
     confirmRemove?.let { row ->
@@ -209,10 +225,9 @@ private fun ContinueCard(item: LibraryViewModel.ContinueItem, onClick: () -> Uni
             .clickable { onClick() },
     ) {
         Box {
-            AsyncImage(
+            NagomiAsyncImage(
                 model = item.coverURL,
                 contentDescription = null,
-                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
                 modifier = Modifier
                     .fillMaxWidth()
                     .aspectRatio(1.6f)
@@ -258,10 +273,9 @@ private fun CloudRowItem(
                 .clickable { viewModel.toggleExpand(row) },
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            AsyncImage(
+            NagomiAsyncImage(
                 model = row.coverURL,
                 contentDescription = null,
-                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
                 modifier = Modifier
                     .width(44.dp)
                     .aspectRatio(0.7f)

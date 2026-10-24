@@ -27,9 +27,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -46,9 +48,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.viewmodel.compose.viewModel
-import coil.compose.AsyncImage
 import com.sparkhoward.nagomiani.core.bangumi.BangumiAuth
 import com.sparkhoward.nagomiani.core.model.CollectionType
+import com.sparkhoward.nagomiani.ui.theme.NagomiAsyncImage
 import com.sparkhoward.nagomiani.ui.theme.NagomiColors
 import com.sparkhoward.nagomiani.ui.theme.NagomiPrimaryButton
 import com.sparkhoward.nagomiani.ui.theme.NagomiSectionHeader
@@ -59,6 +61,7 @@ import kotlinx.coroutines.launch
 import java.util.UUID
 
 /** 追番页：未登录引导 / 登录后收藏五态列表 */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BangumiScreen(
     onOpenDetail: (Int) -> Unit,
@@ -69,6 +72,11 @@ fun BangumiScreen(
     // 每次回到本页都重查登录态（登录页 popBackStack 返回后能看到已登录）
     androidx.compose.runtime.LaunchedEffect(Unit) { viewModel.refreshIfLoggedOut() }
 
+    // 下拉刷新：重拉用户信息与收藏列表（与页头刷新按钮同路）
+    PullToRefreshBox(
+        isRefreshing = state.refreshing,
+        onRefresh = { viewModel.refresh() },
+    ) {
     LazyColumn(Modifier.fillMaxSize()) {
         item {
             Row(
@@ -125,7 +133,7 @@ fun BangumiScreen(
                         Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        AsyncImage(
+                        NagomiAsyncImage(
                             model = state.user?.avatar?.bestURL(),
                             contentDescription = null,
                             modifier = Modifier
@@ -239,10 +247,9 @@ fun BangumiScreen(
                             .padding(horizontal = 16.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        AsyncImage(
+                        NagomiAsyncImage(
                             model = subject?.images?.bestURL(),
                             contentDescription = null,
-                            contentScale = androidx.compose.ui.layout.ContentScale.Crop,
                             modifier = Modifier
                                 .width(52.dp)
                                 .aspectRatio(0.7f)
@@ -280,6 +287,7 @@ fun BangumiScreen(
                 }
             }
         }
+    }
     }
 }
 

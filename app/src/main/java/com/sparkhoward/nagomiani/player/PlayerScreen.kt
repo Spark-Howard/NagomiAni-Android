@@ -30,6 +30,8 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import com.sparkhoward.nagomiani.ui.theme.minimumTouchTarget
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -73,6 +75,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -218,6 +222,7 @@ fun PlayerScreen(
     LaunchedEffect(shareCapture) { if (shareCapture != null) showShareSheet = true }
 
     // 播放手势：进度/音量/亮度 HUD 与长按倍速状态
+    val haptics = LocalHapticFeedback.current
     var seekHud by remember { mutableStateOf<SeekHud?>(null) }
     var volumeHud by remember { mutableStateOf<Float?>(null) }
     var brightnessHud by remember { mutableStateOf<Float?>(null) }
@@ -239,6 +244,11 @@ fun PlayerScreen(
             delay(4000)
             viewModel.clearStatusMessage()
         }
+    }
+
+    // 连播征询条弹出：轻触感提示「有下一集可看」（不看控制条是否可见）
+    LaunchedEffect(ui.nextOffer) {
+        if (ui.nextOffer != null) haptics.performHapticFeedback(HapticFeedbackType.LongPress)
     }
 
     // 竖屏用应用主题背景（与全 App 一致），全屏保持纯黑影院
@@ -298,6 +308,7 @@ fun PlayerScreen(
                                 if (!inPip && state.isPlaying && !boosting) {
                                     boostBaseSpeed = viewModel.speed.value
                                     boosting = true
+                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                                     // 临时变速不落盘（persist=false），抬手还原基速
                                     viewModel.setSpeed(3f, persist = false)
                                 }
@@ -307,6 +318,7 @@ fun PlayerScreen(
                                 // 长按快进在抬手时还原用户倍速（快进中离开页面由 dispose 兜底）
                                 if (boosting) {
                                     boosting = false
+                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                                     viewModel.setSpeed(boostBaseSpeed, persist = false)
                                 }
                             },
@@ -594,7 +606,7 @@ fun PlayerScreen(
                         modifier = Modifier
                             .weight(1f)
                             .padding(horizontal = 4.dp)
-                            .height(26.dp),
+                            .heightIn(min = 26.dp),
                     )
                     Text(PlayerViewModel.formatTime(state.durationSeconds), color = Color.White, fontSize = 10.sp)
                     // 线路切换仅横屏展示（竖屏移至下方功能面板）；⚡ = 探测延迟最低的线路
@@ -787,6 +799,7 @@ private fun PortraitPanel(
                     color = if (speed == value) NagomiColors.accent else MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 13.sp,
                     modifier = Modifier
+                        .minimumTouchTarget()
                         .clickable { viewModel.setSpeed(value) }
                         .padding(horizontal = 8.dp, vertical = 4.dp),
                 )

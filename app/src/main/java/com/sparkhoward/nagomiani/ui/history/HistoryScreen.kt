@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -50,9 +51,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import coil.compose.AsyncImage
 import com.sparkhoward.nagomiani.core.history.HistoryStats
 import com.sparkhoward.nagomiani.core.store.AppStore.HistoryRecord
+import com.sparkhoward.nagomiani.ui.theme.NagomiAsyncImage
 import com.sparkhoward.nagomiani.ui.theme.NagomiBadge
 import com.sparkhoward.nagomiani.ui.theme.NagomiCard
 import com.sparkhoward.nagomiani.ui.theme.NagomiColors
@@ -127,7 +128,7 @@ private fun HistoryTab(viewModel: HistoryViewModel, onPlay: () -> Unit) {
                         focusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
                         unfocusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
                     ),
-                    modifier = Modifier.fillMaxWidth().height(52.dp),
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
                 )
             }
         }
@@ -190,10 +191,9 @@ private fun HistoryRow(row: HistoryRecord, onClick: () -> Unit) {
             .clickable(onClick = onClick),
     ) {
         Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-            AsyncImage(
+            NagomiAsyncImage(
                 model = row.coverURL,
                 contentDescription = null,
-                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
                 modifier = Modifier
                     .width(44.dp)
                     .aspectRatio(0.7f)

@@ -7,6 +7,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import com.sparkhoward.nagomiani.ui.theme.minimumTouchTarget
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -95,7 +97,7 @@ fun DanmakuSettingsSheet(
                         thumbColor = NagomiColors.accent,
                         activeTrackColor = NagomiColors.accent,
                     ),
-                    modifier = Modifier.weight(1f).height(26.dp),
+                    modifier = Modifier.weight(1f).heightIn(min = 26.dp),
                 )
                 Text(
                     "${fontSize.toInt()}",
@@ -115,6 +117,7 @@ fun DanmakuSettingsSheet(
                             color = if (colorMode == mode) NagomiColors.accent else LabelColor,
                             fontSize = 13.sp,
                             modifier = Modifier
+                                .minimumTouchTarget()
                                 .clickable { onUpdate { it.copy(colorMode = mode) } }
                                 .padding(horizontal = 8.dp, vertical = 2.dp),
                         )
@@ -124,6 +127,7 @@ fun DanmakuSettingsSheet(
                     Row(Modifier.padding(top = 4.dp)) {
                         palette.forEach { c ->
                             androidx.compose.foundation.Canvas(Modifier
+                                .minimumTouchTarget()
                                 .padding(end = 8.dp)
                                 .size(20.dp)
                                 .clickable { onUpdate { s -> s.copy(customColor = c) } }) {
@@ -149,6 +153,7 @@ fun DanmakuSettingsSheet(
                         color = if (opacity == value) NagomiColors.accent else LabelColor,
                         fontSize = 13.sp,
                         modifier = Modifier
+                            .minimumTouchTarget()
                             .clickable { onUpdate { it.copy(opacity = value) } }
                             .padding(horizontal = 8.dp, vertical = 2.dp),
                     )
@@ -164,7 +169,10 @@ fun DanmakuSettingsSheet(
                     "重新获取",
                     color = NagomiColors.accent,
                     fontSize = 12.sp,
-                    modifier = Modifier.clickable { onRefetch() },
+                    modifier = Modifier
+                        .minimumTouchTarget()
+                        .clickable { onRefetch() }
+                        .padding(horizontal = 4.dp, vertical = 2.dp),
                 )
             }
         }

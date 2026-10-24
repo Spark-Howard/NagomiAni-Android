@@ -25,6 +25,8 @@ class SearchViewModel(app: Application) : AndroidViewModel(app) {
         val keyword: String = "",
         val searching: Boolean = false,
         val results: List<Subject> = emptyList(),
+        val loadingMore: Boolean = false,
+        val canLoadMore: Boolean = false,
         val weekly: List<com.sparkhoward.nagomiani.core.online.WeeklyCalendar.Slot> = emptyList(),
         val weeklyLoading: Boolean = false,
         val weeklyError: String? = null,
@@ -36,6 +38,7 @@ class SearchViewModel(app: Application) : AndroidViewModel(app) {
     val state = MutableStateFlow(State())
     private var searchGeneration = 0
     private var weeklyGeneration = 0
+    private var currentQuery = ""
 
     init {
         loadWeekly()
@@ -49,18 +52,51 @@ class SearchViewModel(app: Application) : AndroidViewModel(app) {
     fun search() {
         val keyword = state.value.keyword.trim()
         if (keyword.isEmpty()) return
+        currentQuery = keyword
         val generation = ++searchGeneration
         viewModelScope.launch {
-            state.value = state.value.copy(searching = true, error = null)
+            state.value = state.value.copy(searching = true, error = null, results = emptyList(), canLoadMore = false)
             try {
-                val page = api().searchSubjects(keyword, limit = 30)
+                val page = api().searchSubjects(keyword, limit = PAGE_SIZE, offset = 0)
                 if (generation != searchGeneration) return@launch
                 // 客户端兜底过滤：确保只留动漫（服务端 filter 失效时）
                 val filtered = page.data.filter { it.type == SUBJECT_TYPE_ANIME || it.type == 0 }
-                state.value = state.value.copy(searching = false, results = filtered)
+                state.value = state.value.copy(
+                    searching = false,
+                    results = filtered,
+                    canLoadMore = filtered.isNotEmpty() && filtered.size < page.total,
+                )
             } catch (e: Exception) {
                 if (generation != searchGeneration) return@launch
-                state.value = state.value.copy(searching = false, results = emptyList(), error = "搜索失败：${e.message}")
+                state.value = state.value.copy(searching = false, results = emptyList(), canLoadMore = false, error = "搜索失败：${e.message}")
+            }
+        }
+    }
+
+    /** 加载更多（30/页，offset 续拉；按 id 去重，整页重复也终止——自动加载不会死循环） */
+    fun loadMore() {
+        val s = state.value
+        if (s.searching || s.loadingMore || !s.canLoadMore) return
+        val generation = searchGeneration
+        viewModelScope.launch {
+            state.value = state.value.copy(loadingMore = true)
+            try {
+                val page = api().searchSubjects(currentQuery, limit = PAGE_SIZE, offset = s.results.size)
+                if (generation != searchGeneration) return@launch
+                val existing = s.results.map { it.id }.toHashSet()
+                val fresh = page.data
+                    .filter { it.type == SUBJECT_TYPE_ANIME || it.type == 0 }
+                    .filterNot { existing.contains(it.id) }
+                val merged = s.results + fresh
+                state.value = state.value.copy(
+                    loadingMore = false,
+                    results = merged,
+                    canLoadMore = fresh.isNotEmpty() && merged.size < page.total,
+                )
+            } catch (_: Exception) {
+                if (generation != searchGeneration) return@launch
+                // 保留 canLoadMore，用户可点「加载更多」重试
+                state.value = state.value.copy(loadingMore = false)
             }
         }
     }
@@ -103,5 +139,9 @@ class SearchViewModel(app: Application) : AndroidViewModel(app) {
             } catch (_: Exception) {
             }
         }
+    }
+
+    private companion object {
+        const val PAGE_SIZE = 30
     }
 }

@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import com.sparkhoward.nagomiani.ui.theme.minimumTouchTarget
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -57,7 +58,6 @@ import androidx.compose.ui.unit.dp
 import kotlin.math.max
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import coil.compose.AsyncImage
 import com.sparkhoward.nagomiani.core.model.CollectionModifyPayload
 import com.sparkhoward.nagomiani.core.model.CollectionType
 import com.sparkhoward.nagomiani.core.model.Episode
@@ -65,11 +65,13 @@ import com.sparkhoward.nagomiani.core.model.SubjectInfobox
 import com.sparkhoward.nagomiani.core.model.Subject
 import com.sparkhoward.nagomiani.player.PlaybackBus
 import com.sparkhoward.nagomiani.ui.library.LatencyBadge
+import com.sparkhoward.nagomiani.ui.theme.NagomiAsyncImage
 import com.sparkhoward.nagomiani.ui.theme.NagomiBadge
 import com.sparkhoward.nagomiani.ui.theme.NagomiColors
 import com.sparkhoward.nagomiani.ui.theme.NagomiSecondaryButton
 import com.sparkhoward.nagomiani.ui.theme.NagomiSectionHeader
 import com.sparkhoward.nagomiani.ui.theme.NagomiSegmented
+import com.sparkhoward.nagomiani.ui.theme.NagomiSkeletonBox
 
 /** 条目详情页：头部/评分/标签/infobox/简介 + 我的收藏 + 在线观看（跨片源） */
 @Composable
@@ -91,9 +93,7 @@ fun SubjectDetailScreen(
         }
 
         when {
-            state.loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = NagomiColors.accent)
-            }
+            state.loading -> DetailSkeleton()
             state.subject == null -> Text(
                 state.error ?: "加载失败",
                 color = MaterialTheme.colorScheme.error,
@@ -104,10 +104,30 @@ fun SubjectDetailScreen(
     }
 }
 
+/** 详情页首屏骨架：海报块 + 标题/副标题行 + 区块条，替代整页转圈 */
+@Composable
+private fun DetailSkeleton() {
+    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp)) {
+        Row {
+            NagomiSkeletonBox(Modifier.width(130.dp).aspectRatio(0.7f), RoundedCornerShape(10.dp))
+            Column(Modifier.weight(1f).padding(start = 12.dp, top = 8.dp)) {
+                NagomiSkeletonBox(Modifier.fillMaxWidth(0.75f).height(20.dp))
+                NagomiSkeletonBox(Modifier.fillMaxWidth(0.5f).height(12.dp).padding(top = 6.dp))
+                NagomiSkeletonBox(Modifier.fillMaxWidth(0.4f).height(12.dp).padding(top = 6.dp))
+            }
+        }
+        NagomiSkeletonBox(Modifier.fillMaxWidth(0.35f).height(16.dp).padding(top = 20.dp))
+        repeat(3) {
+            NagomiSkeletonBox(Modifier.fillMaxWidth().height(14.dp).padding(top = 10.dp))
+        }
+    }
+}
+
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 private fun DetailBody(state: SubjectDetailViewModel.State, viewModel: SubjectDetailViewModel, onPlay: () -> Unit) {
     val subject = state.subject!!
+    val haptics = androidx.compose.ui.platform.LocalHapticFeedback.current
     var infoboxExpanded by remember { mutableStateOf(false) }
     // 分集批量操作确认（true=全部看过 / false=清除全部）
     var confirmBatch by remember { mutableStateOf<Boolean?>(null) }
@@ -124,10 +144,9 @@ private fun DetailBody(state: SubjectDetailViewModel.State, viewModel: SubjectDe
     ) {
         // 头部
         Row(Modifier.padding(horizontal = 16.dp)) {
-            AsyncImage(
+            NagomiAsyncImage(
                 model = subject.images?.bestURL(),
                 contentDescription = null,
-                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
                 modifier = Modifier
                     .width(130.dp)
                     .aspectRatio(0.7f)
@@ -243,6 +262,7 @@ private fun DetailBody(state: SubjectDetailViewModel.State, viewModel: SubjectDe
                             fontWeight = FontWeight.SemiBold,
                             color = if (rate > 0 || comment.isNotBlank()) NagomiColors.accent else MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier
+                                .minimumTouchTarget()
                                 .clickable(enabled = rate > 0 || comment.isNotBlank()) {
                                     viewModel.saveRating(rate.takeIf { it > 0 }, comment)
                                 }
@@ -257,6 +277,7 @@ private fun DetailBody(state: SubjectDetailViewModel.State, viewModel: SubjectDe
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier
+                        .minimumTouchTarget()
                         .clickable { viewModel.removeCollection() }
                         .padding(top = 6.dp),
                 )
@@ -296,6 +317,7 @@ private fun DetailBody(state: SubjectDetailViewModel.State, viewModel: SubjectDe
                                 fontSize = 12.sp,
                                 color = NagomiColors.accent,
                                 modifier = Modifier
+                                    .minimumTouchTarget()
                                     .clickable { confirmBatch = true }
                                     .padding(horizontal = 4.dp, vertical = 2.dp),
                             )
@@ -304,6 +326,7 @@ private fun DetailBody(state: SubjectDetailViewModel.State, viewModel: SubjectDe
                                 fontSize = 12.sp,
                                 color = if (watchedCount > 0) NagomiColors.accent else MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier
+                                    .minimumTouchTarget()
                                     .clickable(enabled = watchedCount > 0) { confirmBatch = false }
                                     .padding(horizontal = 4.dp, vertical = 2.dp),
                             )
@@ -364,7 +387,11 @@ private fun DetailBody(state: SubjectDetailViewModel.State, viewModel: SubjectDe
                 title = { Text(if (watched) "取消标记" else "标记为看过") },
                 text = { Text("「${subject.displayName}」$label" + if (watched) " 已看过，要取消标记吗？" else " 标记为看过，并同步到 Bangumi？") },
                 confirmButton = {
-                    TextButton(onClick = { pendingToggle = null; viewModel.toggleEpisode(ep) }) {
+                    TextButton(onClick = {
+                        haptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                        pendingToggle = null
+                        viewModel.toggleEpisode(ep)
+                    }) {
                         Text(if (watched) "取消标记" else "标为看过", color = NagomiColors.accent, fontWeight = FontWeight.SemiBold)
                     }
                 },
@@ -386,7 +413,11 @@ private fun DetailBody(state: SubjectDetailViewModel.State, viewModel: SubjectDe
                     )
                 },
                 confirmButton = {
-                    TextButton(onClick = { confirmBatch = null; viewModel.markAllEpisodes(markAll) }) {
+                    TextButton(onClick = {
+                        haptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                        confirmBatch = null
+                        viewModel.markAllEpisodes(markAll)
+                    }) {
                         Text("确认", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.SemiBold)
                     }
                 },

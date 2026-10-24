@@ -17,6 +17,8 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import com.sparkhoward.nagomiani.ui.theme.minimumTouchTarget
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -33,11 +35,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Today
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -62,14 +66,16 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 import androidx.lifecycle.viewmodel.compose.viewModel
-import coil.compose.AsyncImage
 import com.sparkhoward.nagomiani.core.model.CollectionType
 import com.sparkhoward.nagomiani.core.model.Subject
+import com.sparkhoward.nagomiani.ui.theme.NagomiAsyncImage
 import com.sparkhoward.nagomiani.ui.theme.NagomiBadge
 import com.sparkhoward.nagomiani.ui.theme.NagomiColors
 import com.sparkhoward.nagomiani.ui.theme.NagomiSectionHeader
+import com.sparkhoward.nagomiani.ui.theme.NagomiSkeletonBox
 
 /** 搜索页：搜索框 + 结果列表；无关键词时展示"新番放送（近一周 · 未来一周）"周历 */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SearchScreen(
     onOpenDetail: (Int) -> Unit,
@@ -93,7 +99,8 @@ fun SearchScreen(
                     .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(999.dp))
                     .padding(horizontal = 14.dp, vertical = 2.dp),
             ) {
-                // Material TextField（光标/选字/输入法行为稳定）；固定高度压扁搜索框
+                // Material TextField（光标/选字/输入法行为稳定）；高度下限压扁搜索框，
+                // 大字号时随文本撑高不裁切
                 androidx.compose.material3.TextField(
                     value = state.keyword,
                     onValueChange = viewModel::updateKeyword,
@@ -115,7 +122,7 @@ fun SearchScreen(
                         focusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
                         unfocusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
                     ),
-                    modifier = Modifier.fillMaxWidth().height(52.dp),
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
                 )
             }
             Spacer(Modifier.width(8.dp))
@@ -124,12 +131,21 @@ fun SearchScreen(
                 color = MaterialTheme.colorScheme.primary,
                 fontWeight = FontWeight.SemiBold,
                 fontSize = 15.sp,
-                modifier = Modifier.clickable { viewModel.search() },
+                modifier = Modifier
+                    .minimumTouchTarget()
+                    .clickable { viewModel.search() }
+                    .padding(horizontal = 4.dp),
             )
         }
 
         if (state.keyword.isEmpty()) {
-            WeeklySection(state, viewModel, onOpenDetail)
+            // 下拉刷新：内容区下拉重拉放送表（与手动刷新同路，不重新定位翻页）
+            PullToRefreshBox(
+                isRefreshing = state.weeklyLoading && state.weekly.isNotEmpty(),
+                onRefresh = { viewModel.loadWeekly() },
+            ) {
+                WeeklySection(state, viewModel, onOpenDetail)
+            }
         } else {
             SearchResultSection(state, viewModel, onOpenDetail)
         }
@@ -247,6 +263,7 @@ private fun WeeklySection(state: SearchViewModel.State, viewModel: SearchViewMod
         }
     }
 }
+
 
 /** 日期芯片的紧凑文案：今天/昨天/明天直呼，「10/23 周五」取自完整标签后半段 */
 private fun chipLabel(slot: com.sparkhoward.nagomiani.core.online.WeeklyCalendar.Slot): String =
@@ -398,10 +415,9 @@ private fun DaySection(slot: com.sparkhoward.nagomiani.core.online.WeeklyCalenda
 @Composable
 private fun SubjectCard(subject: Subject, onOpenDetail: (Int) -> Unit, modifier: Modifier = Modifier) {
     Column(modifier.clickable { onOpenDetail(subject.id) }) {
-        AsyncImage(
+        NagomiAsyncImage(
             model = subject.images?.bestURL(),
             contentDescription = subject.displayName,
-            contentScale = androidx.compose.ui.layout.ContentScale.Crop,
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(0.7f)
@@ -419,8 +435,8 @@ private fun SubjectCard(subject: Subject, onOpenDetail: (Int) -> Unit, modifier:
         )
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            // 固定评分行高度：无评分/集数的条目同样占位，保证整卡等高
-            modifier = Modifier.height(16.dp),
+            // 高度下限占位：无评分/集数的条目同样占位保证整卡等高；大字号随文本撑高不裁切
+            modifier = Modifier.heightIn(min = 16.dp),
         ) {
             subject.rating?.takeIf { it.score > 0 }?.let {
                 Text("★ ${"%.1f".format(it.score)}", fontSize = 11.sp, color = NagomiColors.accent)
@@ -433,8 +449,18 @@ private fun SubjectCard(subject: Subject, onOpenDetail: (Int) -> Unit, modifier:
 @Composable
 private fun SearchResultSection(state: SearchViewModel.State, viewModel: SearchViewModel, onOpenDetail: (Int) -> Unit) {
     if (state.searching) {
-        Box(Modifier.fillMaxSize().padding(40.dp), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator(color = NagomiColors.accent)
+        // 骨架屏：缩略图 + 双行文本条的呼吸占位，替代整页转圈
+        Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp)) {
+            repeat(9) {
+                Row(Modifier.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    NagomiSkeletonBox(Modifier.width(52.dp).height(72.dp), RoundedCornerShape(6.dp))
+                    Column(Modifier.weight(1f).padding(start = 10.dp)) {
+                        NagomiSkeletonBox(Modifier.fillMaxWidth(0.6f).height(15.dp))
+                        NagomiSkeletonBox(Modifier.fillMaxWidth(0.4f).height(11.dp).padding(top = 4.dp))
+                        NagomiSkeletonBox(Modifier.fillMaxWidth(0.3f).height(11.dp).padding(top = 4.dp))
+                    }
+                }
+            }
         }
         return
     }
@@ -449,6 +475,26 @@ private fun SearchResultSection(state: SearchViewModel.State, viewModel: SearchV
     LazyColumn(contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 4.dp)) {
         items(state.results, key = { it.id }) { subject ->
             SubjectRow(subject, state.collectionBadge[subject.id], onOpenDetail)
+        }
+        if (state.canLoadMore) {
+            item(key = "loadMore") {
+                // 滚到底部自动加载下一页（loadMore 内部去重防死循环），也保留点击手动触发
+                LaunchedEffect(state.results.size) { viewModel.loadMore() }
+                Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
+                    if (state.loadingMore) {
+                        CircularProgressIndicator(color = NagomiColors.accent, modifier = Modifier.size(18.dp))
+                    } else {
+                        Text(
+                            "加载更多",
+                            color = MaterialTheme.colorScheme.primary,
+                            fontSize = 13.sp,
+                            modifier = Modifier
+                                .minimumTouchTarget()
+                                .clickable { viewModel.loadMore() },
+                        )
+                    }
+                }
+            }
         }
     }
 }
@@ -467,10 +513,9 @@ fun SubjectRow(
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        AsyncImage(
+        NagomiAsyncImage(
             model = subject.images?.bestURL(),
             contentDescription = null,
-            contentScale = androidx.compose.ui.layout.ContentScale.Crop,
             modifier = Modifier
                 .width(52.dp)
                 .height(72.dp)
