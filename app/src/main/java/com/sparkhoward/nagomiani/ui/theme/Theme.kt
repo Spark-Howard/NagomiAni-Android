@@ -6,10 +6,13 @@ import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
+import com.sparkhoward.nagomiani.AppGraph
 
 /**
  * Nagomi 樱粉主题：色值与 mac 版 Theme.swift 一致。
@@ -66,11 +69,30 @@ private val DarkScheme = darkColorScheme(
     error = Color(0xFFFF7A8E),
 )
 
+/** AMOLED 纯黑：保留樱粉强调色，背景/表面压到纯黑与近黑（OLED 省电） */
+private val AmoledScheme = DarkScheme.copy(
+    background = Color(0xFF000000),
+    surface = Color(0xFF0E0A0C),
+    surfaceVariant = Color(0xFF171114),
+)
+
 @Composable
 fun NagomiTheme(content: @Composable () -> Unit) {
-    val dark = isSystemInDarkTheme()
+    // 应用内主题覆盖（设置中心）：跟随系统 / 手动浅色 / 手动深色，深色下可选 AMOLED 纯黑。
+    // 桌面小部件不读此设置——RemoteViews 用 XML 资源、始终跟随系统深浅色（双份维护约定不变）
+    val mode by AppGraph.store.themeMode.collectAsState(initial = "system")
+    val amoled by AppGraph.store.themeAmoled.collectAsState(initial = false)
+    val dark = when (mode) {
+        "light" -> false
+        "dark" -> true
+        else -> isSystemInDarkTheme()
+    }
     MaterialTheme(
-        colorScheme = if (dark) DarkScheme else LightScheme,
+        colorScheme = when {
+            dark && amoled -> AmoledScheme
+            dark -> DarkScheme
+            else -> LightScheme
+        },
         typography = NagomiTypography,
         content = content,
     )

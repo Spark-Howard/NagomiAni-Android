@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.sparkhoward.nagomiani.AppGraph
 import com.sparkhoward.nagomiani.core.history.HistoryStats
+import com.sparkhoward.nagomiani.core.local.LocalMediaLibrary
 import com.sparkhoward.nagomiani.core.maccms.OnlineRepo
 import com.sparkhoward.nagomiani.core.model.OnlineEpisode
 import com.sparkhoward.nagomiani.core.model.OnlineShow
@@ -66,6 +67,17 @@ class HistoryViewModel(app: Application) : AndroidViewModel(app) {
     /** 点历史行续播（组装套路同番库继续观看卡片） */
     fun playRecord(row: HistoryRecord, onLaunched: () -> Unit) {
         viewModelScope.launch {
+            // 本地视频：resumeKey = seriesKey:集号（键约定），从本地库 meta 取回放参数（不走片源取流）
+            if (row.seriesKey.startsWith("local:")) {
+                val playback = LocalMediaLibrary.playbackFor("${row.seriesKey}:${row.episodeNumber}")
+                if (playback != null) {
+                    PlaybackBus.launch(playback)
+                    onLaunched()
+                } else {
+                    showMessage("本地文件已不可用（目录或文件被移除）")
+                }
+                return@launch
+            }
             val show = OnlineShow(row.providerID, row.showID, row.showTitle, null, row.coverURL)
             val episode = OnlineEpisode(row.providerID, row.showID, row.episodeNumber)
             val playback = onlineRepo.preparePlayback(show, episode, showTitleForDanmaku = row.showTitle)

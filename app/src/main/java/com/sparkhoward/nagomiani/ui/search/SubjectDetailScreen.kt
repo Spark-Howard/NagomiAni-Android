@@ -24,16 +24,24 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.DownloadDone
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.HeartBroken
 import androidx.compose.material.icons.filled.PlaylistAdd
+import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Tv
-import androidx.compose.material.icons.filled.ExpandLess
-import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
@@ -63,6 +71,7 @@ import com.sparkhoward.nagomiani.core.model.CollectionType
 import com.sparkhoward.nagomiani.core.model.Episode
 import com.sparkhoward.nagomiani.core.model.SubjectInfobox
 import com.sparkhoward.nagomiani.core.model.Subject
+import com.sparkhoward.nagomiani.core.model.SubjectCast
 import com.sparkhoward.nagomiani.player.PlaybackBus
 import com.sparkhoward.nagomiani.ui.library.LatencyBadge
 import com.sparkhoward.nagomiani.ui.theme.NagomiAsyncImage
@@ -72,6 +81,7 @@ import com.sparkhoward.nagomiani.ui.theme.NagomiSecondaryButton
 import com.sparkhoward.nagomiani.ui.theme.NagomiSectionHeader
 import com.sparkhoward.nagomiani.ui.theme.NagomiSegmented
 import com.sparkhoward.nagomiani.ui.theme.NagomiSkeletonBox
+import com.sparkhoward.nagomiani.ui.theme.NagomiTextAction
 
 /** 条目详情页：头部/评分/标签/infobox/简介 + 我的收藏 + 在线观看（跨片源） */
 @Composable
@@ -256,31 +266,23 @@ private fun DetailBody(state: SubjectDetailViewModel.State, viewModel: SubjectDe
                         modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
                     )
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                        Text(
+                        NagomiTextAction(
                             "保存评分",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = if (rate > 0 || comment.isNotBlank()) NagomiColors.accent else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier
-                                .minimumTouchTarget()
-                                .clickable(enabled = rate > 0 || comment.isNotBlank()) {
-                                    viewModel.saveRating(rate.takeIf { it > 0 }, comment)
-                                }
-                                .padding(horizontal = 8.dp, vertical = 8.dp),
-                        )
+                            Icons.Filled.Check,
+                            enabled = rate > 0 || comment.isNotBlank(),
+                        ) {
+                            viewModel.saveRating(rate.takeIf { it > 0 }, comment)
+                        }
                     }
                 }
             }
             if (state.isLoggedIn) {
-                Text(
+                NagomiTextAction(
                     "取消收藏",
+                    Icons.Filled.HeartBroken,
                     fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier
-                        .minimumTouchTarget()
-                        .clickable { viewModel.removeCollection() }
-                        .padding(top = 6.dp),
-                )
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                ) { viewModel.removeCollection() }
             } else {
                 Text(
                     "未登录 Bangumi：先到「追番」页登录，收藏状态才会同步",
@@ -312,24 +314,17 @@ private fun DetailBody(state: SubjectDetailViewModel.State, viewModel: SubjectDe
                             modifier = Modifier.padding(end = 10.dp),
                         )
                         if (state.isLoggedIn && !state.episodeSaving) {
-                            Text(
+                            NagomiTextAction(
                                 "全部看过",
+                                Icons.Filled.CheckCircle,
                                 fontSize = 12.sp,
-                                color = NagomiColors.accent,
-                                modifier = Modifier
-                                    .minimumTouchTarget()
-                                    .clickable { confirmBatch = true }
-                                    .padding(horizontal = 4.dp, vertical = 2.dp),
-                            )
-                            Text(
+                            ) { confirmBatch = true }
+                            NagomiTextAction(
                                 "清除",
+                                Icons.Filled.Clear,
                                 fontSize = 12.sp,
-                                color = if (watchedCount > 0) NagomiColors.accent else MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier
-                                    .minimumTouchTarget()
-                                    .clickable(enabled = watchedCount > 0) { confirmBatch = false }
-                                    .padding(horizontal = 4.dp, vertical = 2.dp),
-                            )
+                                enabled = watchedCount > 0,
+                            ) { confirmBatch = false }
                         }
                     }
                 }
@@ -365,14 +360,12 @@ private fun DetailBody(state: SubjectDetailViewModel.State, viewModel: SubjectDe
                         }
                     }
                     if (state.episodes.size > 30) {
-                        Text(
+                        NagomiTextAction(
                             if (episodesExpanded) "收起" else "展开全部（共 ${state.episodes.size} 集）",
+                            if (episodesExpanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
                             fontSize = 12.sp,
-                            color = NagomiColors.accent,
-                            modifier = Modifier
-                                .clickable { episodesExpanded = !episodesExpanded }
-                                .padding(top = 8.dp),
-                        )
+                            modifier = Modifier.padding(top = 6.dp),
+                        ) { episodesExpanded = !episodesExpanded }
                     }
                 }
             }
@@ -445,14 +438,11 @@ private fun DetailBody(state: SubjectDetailViewModel.State, viewModel: SubjectDe
                 val rows = if (infoboxExpanded) subject.infobox else subject.infobox.take(4)
                 rows.forEach { box -> InfoboxRow(box) }
                 if (subject.infobox.size > 4) {
-                    Text(
+                    NagomiTextAction(
                         if (infoboxExpanded) "收起" else "展开全部 ${subject.infobox.size} 项",
-                        color = NagomiColors.accent,
-                        fontSize = 13.sp,
-                        modifier = Modifier
-                            .clickable { infoboxExpanded = !infoboxExpanded }
-                            .padding(top = 4.dp),
-                    )
+                        if (infoboxExpanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                        modifier = Modifier.padding(top = 2.dp),
+                    ) { infoboxExpanded = !infoboxExpanded }
                 }
             }
         }
@@ -469,6 +459,71 @@ private fun DetailBody(state: SubjectDetailViewModel.State, viewModel: SubjectDe
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(top = 6.dp),
                 )
+            }
+        }
+
+        // 角色（legacy 大条目 crt）：中文名 + 头像 + 身份。3 列手动分行——
+        // verticalScroll 容器里不能放 LazyVerticalGrid（同 EpisodeGrid 先例）
+        val casts = state.casts
+        val castsNotReady = state.castsLoading && casts == null
+        if (castsNotReady || state.castsError != null || !casts?.crt.isNullOrEmpty()) {
+            Column(Modifier.padding(16.dp)) {
+                NagomiSectionHeader("角色", Icons.Filled.Face)
+                when {
+                    castsNotReady -> {
+                        Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(color = NagomiColors.accent, modifier = Modifier.size(18.dp))
+                            Text("  正在加载角色…", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                    state.castsError != null -> {
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
+                            Text(state.castsError.orEmpty(), color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
+                            NagomiTextAction("重试", Icons.Filled.Refresh, fontSize = 13.sp) { viewModel.retryCasts() }
+                        }
+                    }
+                    else -> {
+                        val characters = casts?.crt.orEmpty()
+                        var castsExpanded by remember { mutableStateOf(false) }
+                        val shown = if (castsExpanded) characters else characters.take(9)
+                        shown.chunked(3).forEach { rowCasts ->
+                            Row(
+                                Modifier.fillMaxWidth().padding(top = 10.dp),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                rowCasts.forEach { cast -> CharacterCell(cast, Modifier.weight(1f)) }
+                                // 末行不满 3 个补空位对齐
+                                repeat(3 - rowCasts.size) { Spacer(Modifier.weight(1f)) }
+                            }
+                        }
+                        if (characters.size > 9) {
+                            NagomiTextAction(
+                                if (castsExpanded) "收起" else "展开全部 ${characters.size} 位",
+                                if (castsExpanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                                modifier = Modifier.padding(top = 2.dp),
+                            ) { castsExpanded = !castsExpanded }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 制作人员（legacy 大条目 staff）：名字 · 职位，徽章流式排布
+        if (!castsNotReady && state.castsError == null && !casts?.staff.isNullOrEmpty()) {
+            Column(Modifier.padding(horizontal = 16.dp)) {
+                NagomiSectionHeader("制作人员", Icons.Filled.People)
+                androidx.compose.foundation.layout.FlowRow(
+                    Modifier.padding(top = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    casts?.staff?.forEach { cast ->
+                        NagomiBadge(
+                            if (cast.roleText.isBlank()) cast.displayName else "${cast.displayName} · ${cast.roleText}",
+                            MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                }
             }
         }
 
@@ -500,26 +555,18 @@ private fun DetailBody(state: SubjectDetailViewModel.State, viewModel: SubjectDe
                             modifier = Modifier.weight(1f),
                         )
                         if (!state.sourcesLoading) {
-                            Text(
+                            NagomiTextAction(
                                 "刷新",
+                                Icons.Filled.Refresh,
                                 fontSize = 12.sp,
-                                color = NagomiColors.accent,
-                                modifier = Modifier
-                                    .clickable { viewModel.retrySources() }
-                                    .padding(start = 8.dp),
-                            )
+                            ) { viewModel.retrySources() }
                         }
                     }
                 }
                 state.sourcesError?.let {
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
                         Text(it, color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
-                        Text(
-                            "  重试",
-                            color = NagomiColors.accent,
-                            fontSize = 13.sp,
-                            modifier = Modifier.clickable { viewModel.retrySources() },
-                        )
+                        NagomiTextAction("重试", Icons.Filled.Refresh, fontSize = 13.sp) { viewModel.retrySources() }
                     }
                 }
                 state.sources.forEach { (show, episodes) ->
@@ -652,49 +699,38 @@ private fun DetailBody(state: SubjectDetailViewModel.State, viewModel: SubjectDe
                                             fontSize = 13.sp,
                                         )
                                         Spacer(Modifier.weight(1f))
-                                        Text(
+                                        NagomiTextAction(
                                             "全选",
-                                            fontSize = 13.sp,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            modifier = Modifier
-                                                .clickable {
-                                                    // 全选 = 排除未放送与已在缓存中（完成/下载中）的集
-                                                    selected = episodes.filter { ep ->
-                                                        val st = dlStates[ep.resumeKey]
-                                                        ep.number !in state.unairedEpisodes &&
-                                                            st?.let { it.isCompleted || it.isActive } != true
-                                                    }.map { it.number }.toSet()
-                                                }
-                                                .padding(horizontal = 6.dp, vertical = 4.dp),
-                                        )
-                                        Text(
+                                            Icons.Filled.DoneAll,
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        ) {
+                                            // 全选 = 排除未放送与已在缓存中（完成/下载中）的集
+                                            selected = episodes.filter { ep ->
+                                                val st = dlStates[ep.resumeKey]
+                                                ep.number !in state.unairedEpisodes &&
+                                                    st?.let { it.isCompleted || it.isActive } != true
+                                            }.map { it.number }.toSet()
+                                        }
+                                        NagomiTextAction(
                                             "确认缓存",
-                                            fontSize = 13.sp,
-                                            color = if (selected.isEmpty()) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-                                            else NagomiColors.accent,
-                                            fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
-                                            modifier = Modifier
-                                                .clickable(enabled = selected.isNotEmpty()) {
-                                                    viewModel.cacheEpisodes(
-                                                        show,
-                                                        episodes.filter { selected.contains(it.number) },
-                                                    )
-                                                    selecting = false
-                                                    selected = emptySet()
-                                                }
-                                                .padding(horizontal = 6.dp, vertical = 4.dp),
-                                        )
-                                        Text(
+                                            Icons.Filled.Check,
+                                            enabled = selected.isNotEmpty(),
+                                        ) {
+                                            viewModel.cacheEpisodes(
+                                                show,
+                                                episodes.filter { selected.contains(it.number) },
+                                            )
+                                            selecting = false
+                                            selected = emptySet()
+                                        }
+                                        NagomiTextAction(
                                             "取消",
-                                            fontSize = 13.sp,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            modifier = Modifier
-                                                .clickable {
-                                                    selecting = false
-                                                    selected = emptySet()
-                                                }
-                                                .padding(start = 6.dp),
-                                        )
+                                            Icons.Filled.Close,
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        ) {
+                                            selecting = false
+                                            selected = emptySet()
+                                        }
                                     }
                                 }
                                 EpisodeGrid(
@@ -851,6 +887,31 @@ private fun InfoboxRow(box: SubjectInfobox) {
     Row(Modifier.padding(vertical = 2.dp)) {
         Text(box.key, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.width(72.dp))
         Text(valueText, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+/** 角色卡：头像 + 中文名 + 身份徽章（legacy crt 语义，无 CV 列） */
+@Composable
+private fun CharacterCell(cast: SubjectCast, modifier: Modifier = Modifier) {
+    Column(modifier) {
+        NagomiAsyncImage(
+            model = cast.images?.bestURL(),
+            contentDescription = cast.displayName,
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(0.75f)
+                .clip(RoundedCornerShape(8.dp)),
+        )
+        Text(
+            cast.displayName,
+            fontSize = 12.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(top = 4.dp),
+        )
+        if (cast.roleText.isNotBlank()) {
+            NagomiBadge(cast.roleText, MaterialTheme.colorScheme.primary, Modifier.padding(top = 3.dp))
+        }
     }
 }
 

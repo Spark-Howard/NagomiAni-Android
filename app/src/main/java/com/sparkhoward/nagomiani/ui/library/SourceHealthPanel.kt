@@ -39,6 +39,7 @@ import com.sparkhoward.nagomiani.core.store.AppStore
 import com.sparkhoward.nagomiani.ui.theme.NagomiBadge
 import com.sparkhoward.nagomiani.ui.theme.NagomiColors
 import com.sparkhoward.nagomiani.ui.theme.NagomiSecondaryButton
+import com.sparkhoward.nagomiani.ui.theme.NagomiPillAction
 import kotlinx.coroutines.delay
 
 /** 延迟徽章：测速结果 → 「213ms / 1.2s」粉色；不可达橙色；未测灰。番库面板与详情页源行共用 */
@@ -110,12 +111,7 @@ fun SourceHealthPanel(
                 )
                 Spacer(Modifier.width(10.dp))
             } else {
-                Text(
-                    "测速",
-                    color = NagomiColors.accent,
-                    fontSize = 13.sp,
-                    modifier = Modifier.clickable { onProbe() }.padding(horizontal = 6.dp, vertical = 4.dp),
-                )
+                NagomiPillAction("测速", Icons.Filled.Speed) { onProbe() }
             }
             Icon(
                 if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,

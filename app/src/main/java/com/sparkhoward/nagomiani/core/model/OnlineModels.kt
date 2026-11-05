@@ -51,6 +51,8 @@ data class OnlinePlayback(
     val routes: List<String>,
     val showTitle: String?,
     val boundSubjectID: Int? = null,
+    /** 本地文件 MD5 指纹匹配到的 dandanplay episodeId（直取弹幕；null=在线播放走标题匹配） */
+    val danmakuEpisodeId: Long? = null,
 )
 
 /** 弹幕模式（dandanplay 约定：1 滚动 / 4 底部 / 5 顶部） */

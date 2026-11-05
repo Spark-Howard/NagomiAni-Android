@@ -25,7 +25,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.NotificationsNone
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Tv
@@ -36,8 +36,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -63,6 +61,7 @@ import com.sparkhoward.nagomiani.ui.theme.NagomiAsyncImage
 import com.sparkhoward.nagomiani.ui.theme.NagomiBadge
 import com.sparkhoward.nagomiani.ui.theme.NagomiColors
 import com.sparkhoward.nagomiani.ui.theme.NagomiSectionHeader
+import com.sparkhoward.nagomiani.ui.theme.NagomiPillAction
 
 /** 番库页：继续观看卡片横排 + 云端番库列表（展开分集点播） */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -74,7 +73,6 @@ fun LibraryScreen(
     viewModel: LibraryViewModel = viewModel(),
 ) {
     val state by viewModel.state.collectAsState()
-    val updateNotify by viewModel.updateNotify.collectAsState()
 
     // 取消收藏确认弹窗（移除云端条目时会一并清除该番续播记录，需二次确认）
     var confirmRemove by remember { mutableStateOf<LibraryViewModel.CloudRow?>(null) }
@@ -95,43 +93,10 @@ fun LibraryScreen(
     ) {
     LazyColumn(Modifier.fillMaxSize()) {
         item {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("番库", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
                 // 观看历史/统计入口（常驻：看完的集会从继续观看消失，但历史仍在）
-                Text(
-                    "历史 · 统计 ›",
-                    color = NagomiColors.accent,
-                    fontSize = 13.sp,
-                    modifier = Modifier
-                        .clickable(onClick = onOpenHistory)
-                        .padding(horizontal = 4.dp, vertical = 6.dp),
-                )
-            }
-        }
-
-        // 更新提醒开关：每日后台比对云端番库片源集数，有新集发系统通知（点按回本页）
-        item {
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(
-                    Icons.Filled.NotificationsNone,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(16.dp),
-                )
-                Text(
-                    "番库有新集时通知我",
-                    fontSize = 13.sp,
-                    modifier = Modifier.padding(start = 6.dp).weight(1f),
-                )
-                Switch(
-                    checked = updateNotify,
-                    onCheckedChange = { viewModel.toggleUpdateNotify() },
-                    colors = SwitchDefaults.colors(checkedTrackColor = NagomiColors.accent),
-                    modifier = Modifier.height(26.dp),
-                )
+                NagomiPillAction("历史 · 统计", Icons.Filled.History, onClick = onOpenHistory)
             }
         }
 

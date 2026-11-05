@@ -26,9 +26,11 @@ app/src/main/java/com/sparkhoward/nagomiani/
 │   ├── Http.kt            全局 OkHttp：分层 DNS（bgm 域 DoH/边缘 IP 兜底）、应用内代理、UA 常量
 │   ├── backup/            Backup（观看历史+设置导出/导入，新者胜合并）
 │   ├── bangumi/           BangumiApi（v0 + legacy）/ OAuth（WebView + 127.0.0.1:8123 回调）
+│   ├── calendar/          CalendarExportPlanner（追番放送日→日历事件规划）+ CalendarExport（系统日历写入）
 │   ├── dandanplay/        弹幕 API（凭据 XOR 混淆在 assets）——播放链路消费
 │   ├── danmaku/           DanmakuLayout 车道算法 + HtmlEntities——播放链路消费
 │   ├── history/           HistoryStats（观看统计纯函数：汇总/近7日/热力图/年度报告/时长格式化）
+│   ├── local/             本地媒体库：LocalMediaLibrary（SAF 扫描+指纹匹配）+ FileFingerprint（首 16MB MD5）
 │   ├── backup/            Backup（历史+设置导出/导入）
 │   ├── matching/          集号匹配——播放链路消费
 │   ├── similarity/        标题相似度——片源评分消费
@@ -37,22 +39,24 @@ app/src/main/java/com/sparkhoward/nagomiani/
 │   ├── notify/            EpisodeNotify（云端番库更新提醒）+ DailyAiringNotifier（今日放送提醒）
 │   ├── online/            WeeklyCalendar（放送周历 ±7 天窗口、日期升序、初始定位今天）、WeeklyAggregator、SourceSearchCache
 │   ├── store/AppStore.kt  DataStore 集中存储（设置/绑定/续播/云端番库/观看历史/测速/待同步队列）
+│   ├── watchparty/        一起看：WatchPartySync（落位/漂移纯逻辑）+ RoomClient（WS 房间客户端）；relay 在 server/
 │   ├── download/          离线缓存（CacheDataSource + 前台服务）
 │   └── update/            UpdateCenter（GitHub Releases 应用内更新）
 ├── player/                PlayerViewModel/Screen（ExoPlayer）、弹幕渲染、迷你小窗、截图分享卡
 └── ui/
     ├── theme/             Nagomi 樱粉组件库（胶囊/卡片/分段选择器/徽章）
-    ├── search/            搜索+周历、条目详情（收藏五态/评分短评/分集标记/在线观看）
+    ├── search/            搜索+周历（含「导出日历」）、条目详情（收藏五态/评分短评/分集标记/角色制作/在线观看）
     ├── library/           番库（继续观看/云端番库/片源健康面板）
     ├── history/           观看历史+统计双分页（番库页进入的二级页）
     ├── widget/            桌面小部件（今日新番/观看统计 + route deeplink 通道）
-    └── bangumi/           追番页（登录/收藏五态列表/更新提醒开关）
+    ├── bangumi/           追番页（登录/收藏五态列表；页头齿轮进设置中心）
+    └── settings/          设置中心（主题/通知/应用内代理/缓存清理/关于）
 ```
 
 ## 关键约定与先例（改代码前先看）
 
-- **与 mac 版语义对齐**是硬约束（历史先例：弹幕车道常量、续播策略、连播征询阈值）；
-  改动需说明是否两版同步。
+- **本仓库只负责安卓端**（用户指示，2026-10 固化）：功能设计以安卓端自身需求为准，
+  **不参照/不对齐 mac 版**，勿再发起 mac 相关的探索与同步工作。
 - **Bangumi v0 无删除条目收藏端点**：详情页「移除收藏」只做引导（网页端深链 / 改「抛弃」），
   不要发注定失败的请求假装删除；空体 POST 是 upsert（未收藏条目反而会新建「在看」）。
 - **收藏写入口红线**（`CollectionPayloadTest` 契约测试把守）：`rate=0` 是删除评分语义、
@@ -65,6 +69,10 @@ app/src/main/java/com/sparkhoward/nagomiani/
   `WeeklyCalendar`），不要回退成回溯式裸星期或只显示未来的单向窗口。
   搜索页周历为**一天一页**的横滑 Pager（`HorizontalPager`：初始页=今天，右下角「回到今天」；
   页面内不做横向滚动——内层横滑元素会抢翻页手势，每天用 3 列海报网格）。
+- **本地媒体键前缀 `local:`**（与 `online:` 同构）：seriesKey = `local:d<animeId>`（已匹配）或
+  `local:f<hash8>`（未匹配），resumeKey = `"<seriesKey>:<集号>"`——`buildContinueItems`/`playRecord`
+  的前缀分支、`LocalMediaLibrary.playbackFor` 回放、弹幕 episodeId 直取都依赖此约定；
+  本地番不绑定 Bangumi（看完只进本地历史）。
 - **AppStore 范式**：结构化数据用 `@Serializable` + JSON 字符串键；可测的纯逻辑抽成 object
   （参考 `DanmakuLayout`/`HistoryStats`/`WeeklyCalendar` 的 measure 注入/纯函数分区），
   测试用 kotlin.test 平铺断言。**DataStore 的 `edit{}` 块内绝不能再读同一个文件**（持锁重入）——
@@ -88,9 +96,10 @@ app/src/main/java/com/sparkhoward/nagomiani/
 
 ## 当前状态
 
-- 最新发布 **v0.5.0**（周历横滑 Pager 一天一页 + 日期条 + 横向优先手势仲裁、
-  详情页收藏/分集正确性修复——收藏查询走文档端点 `/v0/users/{username}/collections/{id}`、
-  「看过」分集标记与「看到」ep_status 合并展示、查询失败可视化、死会话自愈、
-  小部件 WorkManager 每小时后台刷新 `WidgetRefreshWorker`）。
-- 单元测试 91 项，全部纯 JVM（无 robolectric），新增可测逻辑请照 `HistoryStatsTest`/
+- 最新发布 **v0.7.0**（一起看：播放器面板创建/加入房间码、房主权威同步 + 漂移纠偏 +
+  聊天弹幕，relay 在 `server/`；本地媒体库：SAF 扫描 + 首 16MB MD5 指纹匹配 + 本地
+  弹幕/续播/历史；周历「导出日历」写入系统日历（JST）；设置中心（主题/通知/应用内
+  代理/缓存清理/关于）；详情页角色/制作人员（legacy casts，中文名）；弹幕分层显隐 +
+  密度抽样；dandanplay 凭据构建期混淆生成）。
+- 单元测试 139 项，全部纯 JVM（无 robolectric），新增可测逻辑请照 `HistoryStatsTest`/
   `SourceHealthTest` 风格补测试。

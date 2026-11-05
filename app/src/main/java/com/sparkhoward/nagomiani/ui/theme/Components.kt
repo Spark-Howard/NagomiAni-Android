@@ -11,9 +11,11 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
@@ -43,12 +45,13 @@ import androidx.compose.ui.platform.LocalContext
 val cardCorner = RoundedCornerShape(12.dp)
 val pillCorner = RoundedCornerShape(999.dp)
 
-/** 樱粉胶囊主按钮（NagomiPrimaryButtonStyle） */
+/** 樱粉胶囊主按钮（NagomiPrimaryStyle；可选前导图标） */
 @Composable
 fun NagomiPrimaryButton(
     text: String,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    icon: ImageVector? = null,
     onClick: () -> Unit,
 ) {
     Button(
@@ -58,6 +61,10 @@ fun NagomiPrimaryButton(
         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
         modifier = modifier,
     ) {
+        if (icon != null) {
+            Icon(icon, contentDescription = null, modifier = Modifier.size(17.dp))
+            Spacer(Modifier.width(5.dp))
+        }
         Text(text, fontSize = 15.sp)
     }
 }
@@ -68,6 +75,7 @@ fun NagomiSecondaryButton(
     text: String,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    icon: ImageVector? = null,
     onClick: () -> Unit,
 ) {
     OutlinedButton(
@@ -79,7 +87,79 @@ fun NagomiSecondaryButton(
         ),
         modifier = modifier,
     ) {
+        if (icon != null) {
+            Icon(icon, contentDescription = null, modifier = Modifier.size(17.dp))
+            Spacer(Modifier.width(5.dp))
+        }
         Text(text, fontSize = 15.sp)
+    }
+}
+
+/** 图标 + 文字的轻量操作（收口全 App 的裸文字按钮）：图标在前、48dp 触控、
+ *  enabled=false 整体置灰。tint 按场景传 primary（默认）/ accent / onSurfaceVariant / error */
+@Composable
+fun NagomiTextAction(
+    text: String,
+    icon: ImageVector,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    fontSize: androidx.compose.ui.unit.TextUnit = 13.sp,
+    tint: Color = MaterialTheme.colorScheme.primary,
+    onClick: () -> Unit,
+) {
+    val color = if (enabled) tint else tint.copy(alpha = 0.4f)
+    Row(
+        modifier = modifier
+            .minimumTouchTarget()
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 6.dp, vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(15.dp))
+        Spacer(Modifier.width(4.dp))
+        Text(text, fontSize = fontSize, color = color)
+    }
+}
+
+/** 胶囊小按钮（页头/操作条的独立动作，比文字操作更有形）：淡粉底 + 图标 + 文字，
+ *  filled=true 为实底主操作（白字）。与 NagomiBadge/分段选择器同一视觉语言；
+ *  触控扩展层在最外、视觉胶囊保持原尺寸 */
+@Composable
+fun NagomiPillAction(
+    text: String,
+    icon: ImageVector,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    filled: Boolean = false,
+    fontSize: androidx.compose.ui.unit.TextUnit = 12.sp,
+    tint: Color = MaterialTheme.colorScheme.primary,
+    onClick: () -> Unit,
+) {
+    val active = enabled && filled
+    Row(
+        modifier = modifier
+            .minimumTouchTarget()
+            .clip(pillCorner)
+            .background(
+                when {
+                    active -> tint
+                    enabled -> tint.copy(alpha = 0.10f)
+                    else -> tint.copy(alpha = 0.05f)
+                },
+            )
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        val contentColor = if (active) Color.White else tint.copy(alpha = if (enabled) 1f else 0.4f)
+        Icon(icon, contentDescription = null, tint = contentColor, modifier = Modifier.size(14.dp))
+        Spacer(Modifier.width(4.dp))
+        Text(
+            text,
+            fontSize = fontSize,
+            fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+            color = contentColor,
+        )
     }
 }
 

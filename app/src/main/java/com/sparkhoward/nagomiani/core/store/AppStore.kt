@@ -29,17 +29,26 @@ class AppStore(private val context: Context) {
     private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
 
     private object Keys {
-        val autoplayNext = booleanPreferencesKey("player.autoplayNext")
+        val autoplayNext = booleanPreferencesKey("player.autoplayNext")        // 旧布尔连播开关（仅作迁移读取）
+        val autoplayMode = stringPreferencesKey("player.autoplayMode")         // ask | auto | off
+        val playerResize = stringPreferencesKey("player.resizeMode")           // fit | zoom | fill
         val playerSpeed = floatPreferencesKey("player.speed")                 // 跨集/重启记忆的倍速
         val danmakuEnabled = booleanPreferencesKey("player.danmakuEnabled")
+        val danmakuShowScroll = booleanPreferencesKey("danmaku.showScroll")
+        val danmakuShowTop = booleanPreferencesKey("danmaku.showTop")
+        val danmakuShowBottom = booleanPreferencesKey("danmaku.showBottom")
+        val danmakuDensity = doublePreferencesKey("danmaku.density")
         val danmakuFontSize = doublePreferencesKey("danmaku.fontSize")
         val danmakuFontScaled = booleanPreferencesKey("danmaku.fontSizeScaled")
         val danmakuColorMode = stringPreferencesKey("danmaku.colorMode")
         val danmakuCustomColor = intPreferencesKey("danmaku.customColor")
         val danmakuOpacity = doublePreferencesKey("danmaku.opacity")
+        val danmakuBlockKeywords = stringSetPreferencesKey("danmaku.blockKeywords")
         val maccmsSites = stringSetPreferencesKey("online.maccms.sites")
         val siteHealth = stringPreferencesKey("online.site.health.json") // {providerID: SiteHealthEntry}
         val networkProxy = stringPreferencesKey("network.proxy")                  // "host:port" 或空
+        val themeMode = stringPreferencesKey("app.themeMode")                     // system | light | dark
+        val themeAmoled = booleanPreferencesKey("app.themeAmoled")                // 深色模式下的纯黑底
         val skippedUpdate = stringPreferencesKey("update.skippedVersion")         // 「下次再说」的 tag
         val bindings = stringPreferencesKey("bangumi.bindings.json")          // {seriesKey: subjectID}
         val boundNames = stringPreferencesKey("bangumi.boundNames.json")
@@ -53,14 +62,33 @@ class AppStore(private val context: Context) {
         val historySeeded = booleanPreferencesKey("player.history.seeded")
         val dailyAiringEnabled = booleanPreferencesKey("notify.dailyAiring.enabled")
         val dailyAiringLastDate = stringPreferencesKey("notify.dailyAiring.lastDate") // 已通知的 JST 日期串
+        val calendarExportedEvents = stringPreferencesKey("calendar.exportedEvents.json") // {subjectID: eventId}
+        val opMarks = stringPreferencesKey("player.opMarks.json")            // {seriesKey: OP 结束秒}
+        val autoSkipOp = booleanPreferencesKey("player.autoSkipOp")
+        val localFolders = stringSetPreferencesKey("local.folders")          // SAF 目录树 URI
+        val localItems = stringPreferencesKey("local.items.json")            // {uri: LocalItemMeta}
+        val watchPartyNick = stringPreferencesKey("party.nick")              // 一起看房间内昵称
+        val watchPartyServer = stringPreferencesKey("party.server")          // 自建中继 ws(s)://host[:port]
     }
 
     // MARK: - 播放器设置
 
     val autoplayNext: Flow<Boolean> = context.dataStore.data.map { it[Keys.autoplayNext] ?: true }
+    /** 连播模式（三档）：ask 征询条（默认）/ auto 播完自动切下一集 / off 关闭。
+     *  旧布尔键迁移：关 → off，开/未设置 → ask */
+    val autoplayMode: Flow<String> = context.dataStore.data.map { prefs ->
+        prefs[Keys.autoplayMode] ?: if (prefs[Keys.autoplayNext] == false) "off" else "ask"
+    }
+    /** 播放画面比例（PlayerView resizeMode 口径）：fit 适应 / zoom 裁剪 / fill 拉伸 */
+    val playerResize: Flow<String> = context.dataStore.data.map { it[Keys.playerResize] ?: "fit" }
     /** 倍速记忆（长按 3× 快进为临时变速，不写此键） */
     val playerSpeed: Flow<Float> = context.dataStore.data.map { it[Keys.playerSpeed] ?: 1.0f }
     val danmakuEnabled: Flow<Boolean> = context.dataStore.data.map { it[Keys.danmakuEnabled] ?: true }
+    /** 弹幕分层开关（滚动/顶部/底部）与密度抽样（1.0 / 0.5 / 0.25） */
+    val danmakuShowScroll: Flow<Boolean> = context.dataStore.data.map { it[Keys.danmakuShowScroll] ?: true }
+    val danmakuShowTop: Flow<Boolean> = context.dataStore.data.map { it[Keys.danmakuShowTop] ?: true }
+    val danmakuShowBottom: Flow<Boolean> = context.dataStore.data.map { it[Keys.danmakuShowBottom] ?: true }
+    val danmakuDensity: Flow<Double> = context.dataStore.data.map { it[Keys.danmakuDensity] ?: 1.0 }
     /** 弹幕字号（sp）。默认 14；danmakuFontScaled 标记旧值（18/22/28 预设）是否已迁移到新刻度 */
     val danmakuFontSize: Flow<Double> = context.dataStore.data.map { it[Keys.danmakuFontSize] ?: 14.0 }
     val danmakuFontScaled: Flow<Boolean> = context.dataStore.data.map { it[Keys.danmakuFontScaled] ?: false }
@@ -69,13 +97,23 @@ class AppStore(private val context: Context) {
     val danmakuOpacity: Flow<Double> = context.dataStore.data.map { it[Keys.danmakuOpacity] ?: 1.0 }
 
     suspend fun setAutoplayNext(value: Boolean) = edit { it[Keys.autoplayNext] = value }
+    suspend fun setAutoplayMode(value: String) = edit { it[Keys.autoplayMode] = value }
+    suspend fun setPlayerResize(value: String) = edit { it[Keys.playerResize] = value }
     suspend fun setPlayerSpeed(value: Float) = edit { it[Keys.playerSpeed] = value }
     suspend fun setDanmakuEnabled(value: Boolean) = edit { it[Keys.danmakuEnabled] = value }
+    suspend fun setDanmakuShowScroll(value: Boolean) = edit { it[Keys.danmakuShowScroll] = value }
+    suspend fun setDanmakuShowTop(value: Boolean) = edit { it[Keys.danmakuShowTop] = value }
+    suspend fun setDanmakuShowBottom(value: Boolean) = edit { it[Keys.danmakuShowBottom] = value }
+    suspend fun setDanmakuDensity(value: Double) = edit { it[Keys.danmakuDensity] = value }
     suspend fun setDanmakuFontSize(value: Double) = edit { it[Keys.danmakuFontSize] = value }
     suspend fun markDanmakuFontScaled() = edit { it[Keys.danmakuFontScaled] = true }
     suspend fun setDanmakuColorMode(value: String) = edit { it[Keys.danmakuColorMode] = value }
     suspend fun setDanmakuCustomColor(value: Int) = edit { it[Keys.danmakuCustomColor] = value }
     suspend fun setDanmakuOpacity(value: Double) = edit { it[Keys.danmakuOpacity] = value }
+    /** 关键词屏蔽（弹幕文本命中即不显示） */
+    val danmakuBlockKeywords: Flow<Set<String>> =
+        context.dataStore.data.map { it[Keys.danmakuBlockKeywords] ?: emptySet() }
+    suspend fun setDanmakuBlockKeywords(value: Set<String>) = edit { it[Keys.danmakuBlockKeywords] = value }
 
     // MARK: - 片源站点（内置 4 站不可删 + 用户自加）
 
@@ -110,6 +148,23 @@ class AppStore(private val context: Context) {
     val networkProxyRaw: Flow<String> = context.dataStore.data.map { it[Keys.networkProxy] ?: "" }
 
     suspend fun setNetworkProxy(raw: String) = edit { it[Keys.networkProxy] = raw.trim() }
+
+    // MARK: - 一起看（昵称与自建中继地址；房间本身不在本地持久化）
+
+    val watchPartyNick: Flow<String> = context.dataStore.data.map { it[Keys.watchPartyNick] ?: "" }
+    val watchPartyServer: Flow<String> = context.dataStore.data.map { it[Keys.watchPartyServer] ?: "" }
+
+    suspend fun setWatchPartyNick(value: String) = edit { it[Keys.watchPartyNick] = value.trim().take(24) }
+    suspend fun setWatchPartyServer(value: String) = edit { it[Keys.watchPartyServer] = value.trim() }
+
+    // MARK: - 应用外观（设置中心消费；桌面小部件不读，RemoteViews 仍跟随系统深浅色）
+
+    /** 主题模式：system（默认）/ light / dark */
+    val themeMode: Flow<String> = context.dataStore.data.map { it[Keys.themeMode] ?: "system" }
+    val themeAmoled: Flow<Boolean> = context.dataStore.data.map { it[Keys.themeAmoled] ?: false }
+
+    suspend fun setThemeMode(value: String) = edit { it[Keys.themeMode] = value }
+    suspend fun setThemeAmoled(value: Boolean) = edit { it[Keys.themeAmoled] = value }
 
     // MARK: - 应用内更新（「下次再说」记住的 tag，同版本不再打扰，出现更新版本重新提示）
 
@@ -427,6 +482,83 @@ class AppStore(private val context: Context) {
         context.dataStore.data.first()[Keys.dailyAiringLastDate] ?: ""
 
     suspend fun setDailyAiringLastDate(dateKey: String) = edit { it[Keys.dailyAiringLastDate] = dateKey }
+
+    // MARK: - 系统日历导出（追番放送日 → 全天每周重复事件）
+
+    /** subjectID → 已写入系统日历的 eventId：重复导出按此 upsert（防重复事件），
+     *  「已不在在看清单」的旧导出事件在下次导出时同步删除 */
+    val exportedCalendarEvents: Flow<Map<Int, Long>> = context.dataStore.data.map { prefs ->
+        val raw = prefs[Keys.calendarExportedEvents] ?: return@map emptyMap()
+        runCatching { json.decodeFromString<Map<String, Long>>(raw) }.getOrNull()
+            ?.mapNotNull { (k, v) -> k.toIntOrNull()?.let { it to v } }
+            ?.toMap()
+            ?: emptyMap()
+    }
+
+    suspend fun setExportedCalendarEvents(value: Map<Int, Long>) = edit { prefs ->
+        prefs[Keys.calendarExportedEvents] = json.encodeToString(value.mapKeys { (k, _) -> k.toString() })
+    }
+
+    // MARK: - 跳过片头（seriesKey → OP 结束秒，同系列各集通用）
+
+    val opMarks: Flow<Map<String, Double>> = context.dataStore.data.map { prefs ->
+        prefs[Keys.opMarks]?.let { runCatching { json.decodeFromString<Map<String, Double>>(it) }.getOrNull() } ?: emptyMap()
+    }
+
+    suspend fun setOpMark(seriesKey: String, seconds: Double) = edit { prefs ->
+        val merged = HashMap(prefs[Keys.opMarks]?.let { runCatching { json.decodeFromString<Map<String, Double>>(it) }.getOrNull() } ?: emptyMap())
+        merged[seriesKey] = seconds
+        prefs[Keys.opMarks] = json.encodeToString(merged)
+    }
+
+    suspend fun removeOpMark(seriesKey: String) = edit { prefs ->
+        val merged = HashMap(prefs[Keys.opMarks]?.let { runCatching { json.decodeFromString<Map<String, Double>>(it) }.getOrNull() } ?: emptyMap())
+        merged.remove(seriesKey)
+        prefs[Keys.opMarks] = json.encodeToString(merged)
+    }
+
+    /** 进入片头区间自动 seek（默认关；关=只显示「跳过片头」胶囊供手动点） */
+    val autoSkipOp: Flow<Boolean> = context.dataStore.data.map { it[Keys.autoSkipOp] ?: false }
+    suspend fun setAutoSkipOp(value: Boolean) = edit { it[Keys.autoSkipOp] = value }
+
+    // MARK: - 本地媒体（SAF 目录扫描的本地视频）
+
+    /** 授权过的目录树 URI（可多个；takePersistableUriPermission 后跨重启可读） */
+    val localFolders: Flow<Set<String>> = context.dataStore.data.map { it[Keys.localFolders] ?: emptySet() }
+    suspend fun addLocalFolder(uri: String) = edit { it[Keys.localFolders] = (it[Keys.localFolders] ?: emptySet()) + uri }
+    suspend fun removeLocalFolder(uri: String) = edit { it[Keys.localFolders] = (it[Keys.localFolders] ?: emptySet()) - uri }
+
+    /** 本地文件的解析结果（指纹/匹配/键），点击播放与继续观看/历史回放共用 */
+    @Serializable
+    data class LocalItemMeta(
+        val displayName: String,
+        val sizeBytes: Long = 0,
+        /** 首 16MB MD5（点击播放时惰性计算并缓存） */
+        val hash: String? = null,
+        val animeTitle: String? = null,
+        val animeId: Long? = null,
+        val episodeId: Long? = null,
+        val episodeNumber: Int = 1,
+        val resumeKey: String,
+    )
+
+    val localItems: Flow<Map<String, LocalItemMeta>> = context.dataStore.data.map { prefs ->
+        prefs[Keys.localItems]?.let { runCatching { json.decodeFromString<Map<String, LocalItemMeta>>(it) }.getOrNull() } ?: emptyMap()
+    }
+
+    suspend fun localItemsOnce(): Map<String, LocalItemMeta> = localItems.first()
+
+    suspend fun upsertLocalItem(uri: String, meta: LocalItemMeta) = edit { prefs ->
+        val merged = HashMap(prefs[Keys.localItems]?.let { runCatching { json.decodeFromString<Map<String, LocalItemMeta>>(it) }.getOrNull() } ?: emptyMap())
+        merged[uri] = meta
+        prefs[Keys.localItems] = json.encodeToString(merged)
+    }
+
+    /** 目录移除/重扫后丢弃失效条目（保留仍存在的） */
+    suspend fun retainLocalItems(uris: Set<String>) = edit { prefs ->
+        val merged = prefs[Keys.localItems]?.let { runCatching { json.decodeFromString<Map<String, LocalItemMeta>>(it) }.getOrNull() } ?: emptyMap()
+        prefs[Keys.localItems] = json.encodeToString(merged.filterKeys { it in uris })
+    }
 
     // MARK: - 私有工具
 

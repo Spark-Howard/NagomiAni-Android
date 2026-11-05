@@ -1,5 +1,9 @@
 package com.sparkhoward.nagomiani.ui.search
 
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
@@ -32,6 +36,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.CalendarMonth
+import androidx.compose.material.icons.filled.Event
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Today
 import androidx.compose.material3.CircularProgressIndicator
@@ -58,6 +66,8 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.ContextCompat
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -72,7 +82,9 @@ import com.sparkhoward.nagomiani.ui.theme.NagomiAsyncImage
 import com.sparkhoward.nagomiani.ui.theme.NagomiBadge
 import com.sparkhoward.nagomiani.ui.theme.NagomiColors
 import com.sparkhoward.nagomiani.ui.theme.NagomiSectionHeader
+import com.sparkhoward.nagomiani.ui.theme.NagomiPillAction
 import com.sparkhoward.nagomiani.ui.theme.NagomiSkeletonBox
+import com.sparkhoward.nagomiani.ui.theme.NagomiTextAction
 
 /** 搜索页：搜索框 + 结果列表；无关键词时展示"新番放送（近一周 · 未来一周）"周历 */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -126,16 +138,7 @@ fun SearchScreen(
                 )
             }
             Spacer(Modifier.width(8.dp))
-            Text(
-                "搜索",
-                color = MaterialTheme.colorScheme.primary,
-                fontWeight = FontWeight.SemiBold,
-                fontSize = 15.sp,
-                modifier = Modifier
-                    .minimumTouchTarget()
-                    .clickable { viewModel.search() }
-                    .padding(horizontal = 4.dp),
-            )
+            NagomiPillAction("搜索", Icons.Filled.Search, filled = true) { viewModel.search() }
         }
 
         if (state.keyword.isEmpty()) {
@@ -164,21 +167,55 @@ private fun WeeklySection(state: SearchViewModel.State, viewModel: SearchViewMod
     // 今天页（初始页/回到今天的目标）；/calendar 异常缺今天时兜底到第 0 页
     val homePage = slots.indexOfFirst { it.isToday }.coerceAtLeast(0)
 
+    // 「导出日历」的日历权限：已授予直接导出，否则请求后按结果执行/提示
+    val context = LocalContext.current
+    val calendarPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) { grants ->
+        if (grants[Manifest.permission.READ_CALENDAR] == true &&
+            grants[Manifest.permission.WRITE_CALENDAR] == true
+        ) {
+            viewModel.exportCalendar()
+        } else {
+            viewModel.calendarPermissionDenied()
+        }
+    }
+    val hasCalendarPermission =
+        ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CALENDAR) == PackageManager.PERMISSION_GRANTED &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_CALENDAR) == PackageManager.PERMISSION_GRANTED
+
     Column(Modifier.fillMaxSize()) {
         // 刷新栏：固定在屏幕上方
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            NagomiSectionHeader("新番放送（近一周 · 未来一周）", Icons.Filled.Search, Modifier.weight(1f))
+            NagomiSectionHeader("新番放送（近一周 · 未来一周）", Icons.Filled.CalendarMonth, Modifier.weight(1f))
             state.weeklyFetchedAt?.let {
                 Text("更新于 $it", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
+            NagomiPillAction(
+                if (state.calendarExporting) "导出中…" else "导出日历",
+                Icons.Filled.Event,
+                enabled = !state.calendarExporting,
+            ) {
+                if (hasCalendarPermission) {
+                    viewModel.exportCalendar()
+                } else {
+                    calendarPermission.launch(
+                        arrayOf(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR),
+                    )
+                }
+            }
+            NagomiPillAction("刷新", Icons.Filled.Refresh) { viewModel.loadWeekly() }
+        }
+        // 导出结果/错误/权限提示（紧跟刷新栏，始终可见）
+        state.calendarExportStatus?.let {
             Text(
-                " 刷新",
-                color = MaterialTheme.colorScheme.primary,
-                fontSize = 13.sp,
-                modifier = Modifier.clickable { viewModel.loadWeekly() },
+                it,
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
             )
         }
         // 已有数据时的手动刷新：细进度条，不打断浏览
@@ -480,18 +517,11 @@ private fun SearchResultSection(state: SearchViewModel.State, viewModel: SearchV
             item(key = "loadMore") {
                 // 滚到底部自动加载下一页（loadMore 内部去重防死循环），也保留点击手动触发
                 LaunchedEffect(state.results.size) { viewModel.loadMore() }
-                Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
+                Box(Modifier.fillMaxWidth().padding(8.dp), contentAlignment = Alignment.Center) {
                     if (state.loadingMore) {
                         CircularProgressIndicator(color = NagomiColors.accent, modifier = Modifier.size(18.dp))
                     } else {
-                        Text(
-                            "加载更多",
-                            color = MaterialTheme.colorScheme.primary,
-                            fontSize = 13.sp,
-                            modifier = Modifier
-                                .minimumTouchTarget()
-                                .clickable { viewModel.loadMore() },
-                        )
+                        NagomiTextAction("加载更多", Icons.Filled.ExpandMore) { viewModel.loadMore() }
                     }
                 }
             }

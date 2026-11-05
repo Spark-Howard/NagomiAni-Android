@@ -9,7 +9,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.put
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -23,7 +26,7 @@ import java.util.Base64
 /**
  * dandanplay v2 开放 API 客户端。
  * 签名：BASE64(SHA256(AppId + Timestamp + Path + AppSecret))——非 HMAC，secret 拼在最后，只签 path（不含 query）。
- * 端点：search/episodes、comment/{id}（本地文件 match 在手机端不适用，省略）。
+ * 端点：search/episodes、match（本地文件指纹匹配）、comment/{id}。
  */
 class DandanplayApi(
     private val appId: String,
@@ -34,6 +37,10 @@ class DandanplayApi(
     data class EpisodeResult(val episodeId: Long, val episodeTitle: String)
     data class AnimeResult(val animeId: Long, val animeTitle: String, val episodes: List<EpisodeResult>)
 
+    /** 本地文件匹配结果（episodeId 可直取弹幕；animeId 用于本地系列的 resumeKey 分组） */
+    data class MatchEpisode(val episodeId: Long, val animeId: Long, val animeTitle: String, val episodeTitle: String)
+    data class MatchResult(val isMatched: Boolean, val matches: List<MatchEpisode>)
+
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
     companion object {
@@ -43,6 +50,24 @@ class DandanplayApi(
             val digest = MessageDigest.getInstance("SHA-256").digest(data.toByteArray(Charsets.UTF_8))
             return Base64.getEncoder().encodeToString(digest)
         }
+
+        /** match 响应宽松解析（fixture 单测锚定）：isMatched/matches，缺字段/非法值逐条兜底，非 JSON 返回未命中 */
+        fun parseMatchResponse(text: String): MatchResult = runCatching {
+            val json = Json { ignoreUnknownKeys = true; isLenient = true }
+            val root = json.parseToJsonElement(text).jsonObject
+            val isMatched = root["isMatched"]?.jsonPrimitive?.booleanOrNull ?: false
+            val matches = root["matches"]?.jsonArray?.mapNotNull { entry ->
+                val obj = entry.jsonObject
+                val episodeId = runCatching { obj["episodeId"]?.jsonPrimitive?.long }.getOrNull() ?: return@mapNotNull null
+                MatchEpisode(
+                    episodeId = episodeId,
+                    animeId = runCatching { obj["animeId"]?.jsonPrimitive?.long }.getOrNull() ?: 0L,
+                    animeTitle = runCatching { obj["animeTitle"]?.jsonPrimitive?.contentOrNull }.getOrNull() ?: "",
+                    episodeTitle = runCatching { obj["episodeTitle"]?.jsonPrimitive?.contentOrNull }.getOrNull() ?: "",
+                )
+            } ?: emptyList()
+            MatchResult(isMatched, matches)
+        }.getOrDefault(MatchResult(false, emptyList()))
     }
 
     /** 番名→剧集搜索 */
@@ -114,14 +139,32 @@ class DandanplayApi(
         }.getOrDefault(emptyList())
     }
 
+    /** 本地文件指纹匹配：fileHash = 文件首 16MB 的 MD5（FileFingerprint.md5Prefix），匹配失败/网络错误返回未命中 */
+    suspend fun match(fileName: String, fileHash: String, fileSize: Long): MatchResult = withContext(Dispatchers.IO) {
+        val body = buildJsonObject {
+            put("fileName", fileName)
+            put("fileHash", fileHash)
+            put("fileSize", fileSize)
+            put("matchMode", "hashAndFileName")
+        }.toString()
+        val request = signed("POST", "/api/v2/match", body)
+        runCatching {
+            Http.client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return@use MatchResult(false, emptyList())
+                parseMatchResponse(response.body?.string().orEmpty())
+            }
+        }.getOrDefault(MatchResult(false, emptyList()))
+    }
+
     // MARK: - 签名请求
 
-    private fun signed(method: String, pathWithQuery: String): Request {
+    private fun signed(method: String, pathWithQuery: String, body: String? = null): Request {
         val timestamp = System.currentTimeMillis() / 1000
         val path = pathWithQuery.substringBefore('?')
         val signature = signature(appId, timestamp, path, appSecret)
         return Request.Builder()
             .url(baseURL.trimEnd('/') + pathWithQuery)
+            .apply { if (body != null) post(body.toRequestBody("application/json".toMediaType())) }
             .header("X-AppId", appId)
             .header("X-Timestamp", timestamp.toString())
             .header("X-Signature", signature)

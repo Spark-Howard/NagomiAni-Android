@@ -9,6 +9,7 @@ import com.sparkhoward.nagomiani.core.model.BangumiUser
 import com.sparkhoward.nagomiani.core.model.OAuthTokenResponse
 import com.sparkhoward.nagomiani.core.model.Paged
 import com.sparkhoward.nagomiani.core.model.Subject
+import com.sparkhoward.nagomiani.core.model.SubjectCasts
 import com.sparkhoward.nagomiani.core.model.UserEpisodeCollection
 import com.sparkhoward.nagomiani.core.model.UserSubjectCollection
 import kotlinx.coroutines.Dispatchers
@@ -84,6 +85,11 @@ class BangumiApi(private val tokenProvider: suspend () -> String?) {
 
     /** legacy 大条目（eps/crt/staff/topic/blog 一次拿全）——核心版只用到 eps 兜底，其余字段忽略 */
     suspend fun subjectLarge(id: Int): Subject = get("/subject/$id?responseGroup=large")
+
+    /** 角色/制作人员：legacy 大条目端点一次带回 crt/staff（公开数据无需登录）。
+     *  响应体很大（blog/topic/eps 等一并返回），只解析这两个数组，其余字段交给 ignoreUnknownKeys 忽略；
+     *  v0 characters 端点元素无 name_cn 中文名，与全 App 中文显示不一致，故用 legacy */
+    suspend fun subjectCasts(id: Int): SubjectCasts = get("/subject/$id?responseGroup=large")
 
     suspend fun episodes(subjectId: Int, limit: Int = 300, offset: Int = 0): Paged<Episode> =
         get("/v0/episodes?subject_id=$subjectId&type=0&limit=$limit&offset=$offset")

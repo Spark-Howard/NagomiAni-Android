@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.sparkhoward.nagomiani.AppGraph
 import com.sparkhoward.nagomiani.core.bangumi.BangumiApi
 import com.sparkhoward.nagomiani.core.bangumi.BangumiAuth
+import com.sparkhoward.nagomiani.core.local.LocalMediaLibrary
 import com.sparkhoward.nagomiani.core.maccms.MacCMSApi
 import com.sparkhoward.nagomiani.core.maccms.OnlineRepo
 import com.sparkhoward.nagomiani.core.maccms.SourceHealth
@@ -55,15 +56,6 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
     )
 
     val state = MutableStateFlow(State())
-
-    /** 番库有新集时发系统通知（每日后台检查，见 EpisodeNotify） */
-    val updateNotify = MutableStateFlow(true)
-
-    init {
-        viewModelScope.launch {
-            store.updateNotifyEnabled.collect { updateNotify.value = it }
-        }
-    }
 
     // MARK: - 片源健康面板（站点测速 + 自加站点管理）
 
@@ -150,10 +142,6 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun toggleUpdateNotify() {
-        viewModelScope.launch { store.setUpdateNotifyEnabled(!updateNotify.value) }
-    }
-
     /** 返回 Job 供下拉刷新等待完成（指示器只对用户主动刷新显示，进页自动刷新不闪） */
     fun refresh(): kotlinx.coroutines.Job = viewModelScope.launch {
         // loading 置位 + 分步发布：否则多秒刷新期间列表空白，还会误渲染"还没有云端番"空态
@@ -172,9 +160,23 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
         val seenSeries = HashSet<String>()
         val items = ArrayList<ContinueItem>()
         for ((key, entry) in sorted) {
-            if (!key.startsWith("online:")) continue // 核心版只有云端记录
             val seriesKey = key.substringBeforeLast(':')
             if (!seenSeries.add(seriesKey)) continue
+            // 本地视频：无封面（占位图），playback 从本地库 meta 重建（一番一卡靠 local:d<animeId> 分组）
+            if (key.startsWith("local:")) {
+                val playback = LocalMediaLibrary.playbackFor(key) ?: continue
+                items += ContinueItem(
+                    resumeKey = key,
+                    title = playback.showTitle ?: playback.displayTitle ?: "本地视频",
+                    subtitle = "上次看到第 ${playback.episodeNumber} 集 · 本地",
+                    coverURL = null,
+                    progress = if (entry.duration > 0) (entry.position / entry.duration).toFloat().coerceIn(0f, 1f) else 0f,
+                    playback = playback,
+                )
+                if (items.size >= 6) break
+                continue
+            }
+            if (!key.startsWith("online:")) continue // 云端记录
             val known = knownShows[seriesKey] ?: continue
             val providerID = known.providerID
             val showID = known.showID

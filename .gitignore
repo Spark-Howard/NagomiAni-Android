@@ -17,3 +17,4 @@ nagomiani-release.keystore
 
 .kotlin/
 .zcode/
+server/node_modules/

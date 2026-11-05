@@ -204,3 +204,31 @@ data class OAuthTokenResponse(
     @SerialName("refresh_token") val refreshToken: String? = null,
     @SerialName("user_id") val userId: Long = 0,
 )
+
+/** legacy 大条目 /subject/{id}?responseGroup=large 的角色（crt）/制作人员（staff）条目。
+ *  实测字段：role_name 是身份文案（角色=主角/配角/客串；制作常为空串，真实职位在 jobs 数组，
+ *  如 ["原作","导演","脚本"]）；CV（actors）与人物 info 等暂不消费，交给 ignoreUnknownKeys 忽略。
+ *  不用 v0 characters 端点：其元素无 name_cn 中文名，与全 App 中文显示不一致 */
+@Serializable
+data class SubjectCast(
+    val id: Int = 0,
+    val name: String = "",
+    @SerialName("name_cn") val nameCn: String = "",
+    val images: SubjectImages? = null,
+    @SerialName("role_name") val roleName: String? = null,
+    val jobs: List<String> = emptyList(),
+) {
+    /** 中文名优先（可能为空串），与 Subject.displayName 同规则 */
+    val displayName: String get() = nameCn.ifEmpty { name }
+
+    /** 身份/职位文案：制作取 jobs 拼串（可多职位），角色回退 role_name */
+    val roleText: String
+        get() = jobs.filter { it.isNotBlank() }.joinToString(" / ").ifEmpty { roleName.orEmpty() }
+}
+
+/** legacy 大条目的角色/制作人员两个数组——其余大字段（blog/topic/eps/…）不声明即被忽略 */
+@Serializable
+data class SubjectCasts(
+    val crt: List<SubjectCast> = emptyList(),
+    val staff: List<SubjectCast> = emptyList(),
+)

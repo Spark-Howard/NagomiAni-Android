@@ -17,6 +17,7 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -42,17 +43,27 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.ArrowCircleRight
+import androidx.compose.material.icons.filled.AspectRatio
+import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.Brightness6
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.FastForward
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
+import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.PictureInPicture
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -86,8 +97,11 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.ViewModelStoreOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.sparkhoward.nagomiani.core.maccms.SourceHealth
+import com.sparkhoward.nagomiani.core.watchparty.RoomClient
 import com.sparkhoward.nagomiani.ui.theme.NagomiColors
 import com.sparkhoward.nagomiani.ui.theme.NagomiSecondaryButton
+import com.sparkhoward.nagomiani.ui.theme.NagomiSegmented
+import com.sparkhoward.nagomiani.ui.theme.NagomiTextAction
 import kotlinx.coroutines.delay
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -196,6 +210,10 @@ fun PlayerScreen(
     val routeHealth by viewModel.routeHealth.collectAsState()
     val danmakuController by viewModel.danmaku.collectAsState()
     val danmakuSettings by viewModel.danmakuSettings.collectAsState()
+    val resizeMode by viewModel.resizeMode.collectAsState()
+    val sleepTimerActive = viewModel.sleepTimer.collectAsState().value != null
+    // 一起看聊天（同时以弹幕样式并入画面）
+    val partyChat by viewModel.partyChat.collectAsState()
     val danmakuState by (danmakuController?.state?.collectAsState() ?: remember { mutableStateOf(DanmakuController.State()) })
     // 弹幕控制器（外层声明：覆盖层与设置弹层分处两层布局，都要用）
     val controller = danmakuController
@@ -213,6 +231,8 @@ fun PlayerScreen(
     var seekPreview by remember { mutableStateOf(0.0) }
     var showDanmakuSheet by remember { mutableStateOf(false) }
     var showShareSheet by remember { mutableStateOf(false) }
+    var showSleepDialog by remember { mutableStateOf(false) }
+    var showWatchPartySheet by remember { mutableStateOf(false) }
 
     // 弹幕覆盖层引用：截图分享时快照当前屏上的弹幕画面
     var danmakuOverlayView by remember { mutableStateOf<DanmakuOverlayView?>(null) }
@@ -274,7 +294,15 @@ fun PlayerScreen(
                         (view.parent as? ViewGroup)?.removeView(view)
                     }
                 },
-                update = { it.player = viewModel.exoPlayer },
+                update = { view ->
+                    view.player = viewModel.exoPlayer
+                    // 画面比例：适应 / 裁剪（等比放大出画）/ 拉伸——采集站片源尺寸常不准
+                    view.resizeMode = when (resizeMode) {
+                        "zoom" -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                        "fill" -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FILL
+                        else -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
+                    }
+                },
                 modifier = Modifier.fillMaxSize(),
             )
 
@@ -288,7 +316,18 @@ fun PlayerScreen(
                         view.timeProvider = { viewModel.playerState.value.positionSeconds }
                         view.isPlayingProvider = { viewModel.playerState.value.isPlaying }
                         view.setSettings(danmakuSettings)
-                        view.setComments(danmakuState.comments)
+                        // 一起看聊天以弹幕样式并入（樱粉滚动弹幕）；无聊天时保持原列表，避免多余重建
+                        val filtered = DanmakuDisplayFilter.filter(
+                            danmakuState.comments,
+                            danmakuSettings.showScroll,
+                            danmakuSettings.showTop,
+                            danmakuSettings.showBottom,
+                            danmakuSettings.density,
+                            danmakuSettings.blockKeywords,
+                        )
+                        view.setComments(
+                            if (partyChat.isEmpty()) filtered else filtered + viewModel.partyChatAsDanmaku()
+                        )
                     },
                     modifier = Modifier.fillMaxSize(),
                 )
@@ -567,6 +606,32 @@ fun PlayerScreen(
                 }
             }
 
+            // 跳过片头胶囊（已打点且仍在片头区间内；画中画内不显示）——与连播征询条同时段互斥，
+            // 同用 BottomCenter 位置
+            if (!inPip) {
+                val opEnd = ui.opEndSeconds
+                if (opEnd != null && state.positionSeconds < opEnd - 0.5) {
+                    Row(
+                        Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(bottom = 84.dp)
+                            .background(Color(0xCC2A2124), RoundedCornerShape(999.dp))
+                            .clickable { viewModel.skipOpIntro() }
+                            .padding(horizontal = 14.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            Icons.Filled.FastForward,
+                            "跳过片头",
+                            tint = NagomiColors.accentDark,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Spacer(Modifier.size(6.dp))
+                        Text("跳过片头", color = Color.White, fontSize = 14.sp)
+                    }
+                }
+            }
+
             // 底部控制条（单行：弹幕 + 时间 + 进度 + [线路] + 播放 + 全屏）
             if (controlsVisible) {
                 Row(
@@ -639,6 +704,23 @@ fun PlayerScreen(
                             modifier = Modifier.size(18.dp),
                         )
                     }
+                    // 画面比例循环（仅全屏；竖屏在下方面板选择）
+                    if (isFullscreen) {
+                        IconButton(onClick = { viewModel.cycleResizeMode() }, modifier = Modifier.size(30.dp)) {
+                            Icon(Icons.Filled.AspectRatio, "画面比例", tint = Color.White, modifier = Modifier.size(18.dp))
+                        }
+                    }
+                    // 睡眠定时（仅全屏；启用中月亮高亮，弹窗可选倒计时/播完本集）
+                    if (isFullscreen) {
+                        IconButton(onClick = { showSleepDialog = true }, modifier = Modifier.size(30.dp)) {
+                            Icon(
+                                Icons.Filled.Bedtime,
+                                "睡眠定时",
+                                tint = if (sleepTimerActive) NagomiColors.accentDark else Color.White,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
+                    }
                     // 应用内悬浮小窗：退出本页、视频在页面角落继续播（拖动移位/拖角缩放）
                     IconButton(onClick = onMinimize, modifier = Modifier.size(30.dp)) {
                         Icon(
@@ -660,14 +742,14 @@ fun PlayerScreen(
             }
         }
 
-        // 竖屏功能面板：视频下方的黑色区域（选集 / 倍速 / 线路 / 连播 / 缓存本集）
+        // 竖屏功能面板：视频下方的黑色区域（选集 / 倍速 / 线路 / 连播 / 缓存本集 / 一起看）
         if (!immersive) {
             PortraitPanel(
                 viewModel = viewModel,
                 panel = viewModel.panel.collectAsState().value,
                 speed = viewModel.speed.collectAsState().value,
-                autoplayNext = viewModel.autoplayNext.collectAsState().value,
                 routeHealth = routeHealth,
+                onOpenWatchParty = { showWatchPartySheet = true },
                 modifier = Modifier
                     .weight(1f, fill = false)
                     .verticalScroll(rememberScrollState()),
@@ -730,20 +812,97 @@ fun PlayerScreen(
                 viewModel.dismissShareSheet()
             }
         }
+
+        // 一起看弹层：与弹幕设置同款非模态覆盖层（创建/加入房间、成员、聊天、退出）
+        AnimatedVisibility(
+            visible = showWatchPartySheet,
+            enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
+            exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
+            modifier = Modifier.fillMaxSize(),
+        ) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                    ) { showWatchPartySheet = false },
+                contentAlignment = Alignment.BottomCenter,
+            ) {
+                WatchPartySheet(
+                    viewModel = viewModel,
+                    onDismiss = { showWatchPartySheet = false },
+                )
+            }
+        }
+
+        // 睡眠定时弹窗（全屏控制栏月亮图标呼出；倒计时实时刷新）
+        if (showSleepDialog) {
+            val dialogTimer = viewModel.sleepTimer.collectAsState().value
+            val dialogRemaining = viewModel.sleepRemainingMs.collectAsState().value
+            val dialogChoice = viewModel.sleepChoice.collectAsState().value
+            AlertDialog(
+                onDismissRequest = { showSleepDialog = false },
+                title = { Text("睡眠定时") },
+                text = {
+                    Column {
+                        when {
+                            dialogTimer?.atEpisodeEnd == true ->
+                                Text("本集播完后停止播放", color = NagomiColors.accent, fontSize = 13.sp)
+                            dialogTimer != null && dialogRemaining != null ->
+                                Text("剩余 ${formatCountdown(dialogRemaining)}", color = NagomiColors.accent, fontSize = 13.sp)
+                        }
+                        Spacer(Modifier.height(6.dp))
+                        PlayerViewModel.SleepChoice.entries.forEach { choice ->
+                            val label = when (choice) {
+                                PlayerViewModel.SleepChoice.OFF -> "关闭"
+                                PlayerViewModel.SleepChoice.M15 -> "15 分钟"
+                                PlayerViewModel.SleepChoice.M30 -> "30 分钟"
+                                PlayerViewModel.SleepChoice.M60 -> "60 分钟"
+                                PlayerViewModel.SleepChoice.EPISODE_END -> "播完本集停"
+                            }
+                            val selected = dialogChoice == choice
+                            Text(
+                                label,
+                                color = if (selected) NagomiColors.accent else MaterialTheme.colorScheme.onSurface,
+                                fontWeight = if (selected) androidx.compose.ui.text.font.FontWeight.SemiBold
+                                else androidx.compose.ui.text.font.FontWeight.Normal,
+                                fontSize = 15.sp,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .minimumTouchTarget()
+                                    .clickable { viewModel.setSleepTimer(choice) }
+                                    .padding(vertical = 10.dp),
+                            )
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { showSleepDialog = false }) { Text("完成") }
+                },
+            )
+        }
     }
 }
 
-/** 竖屏下面板：任何集数下都由常驻组件（上下集/倍速/线路/连播/缓存）撑住版面，选集网格集数≥2 才出现 */
+/** 竖屏下面板：任何集数下都由常驻组件（上下集/倍速/线路/连播/缓存/一起看）撑住版面，选集网格集数≥2 才出现 */
 @Composable
 private fun PortraitPanel(
     viewModel: PlayerViewModel,
     panel: PlayerViewModel.PanelState,
     speed: Float,
-    autoplayNext: Boolean,
     routeHealth: List<Long?>,
+    onOpenWatchParty: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     LaunchedEffect(Unit) { viewModel.loadPanelIfNeeded() }
+    val autoplayMode by viewModel.autoplayMode.collectAsState()
+    val resizeMode by viewModel.resizeMode.collectAsState()
+    val sleepChoice by viewModel.sleepChoice.collectAsState()
+    val sleepRemaining by viewModel.sleepRemainingMs.collectAsState()
+    val uiState by viewModel.ui.collectAsState()
+    val autoSkipOp by viewModel.autoSkipOp.collectAsState()
+    val party by viewModel.partyState.collectAsState()
     val routes = viewModel.playback?.routes.orEmpty()
     if (viewModel.playback == null) return
     val nextTitle = panel.episodes.firstOrNull { it.number == panel.currentNumber + 1 }?.displayTitle
@@ -778,12 +937,14 @@ private fun PortraitPanel(
         // 上一集 / 下一集
         Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             PanelButton(
-                "⏮ 上一集",
+                "上一集",
+                icon = Icons.Filled.SkipPrevious,
                 enabled = panel.episodes.any { it.number == panel.currentNumber - 1 },
                 modifier = Modifier.weight(1f),
             ) { viewModel.playEpisodeNumber(panel.currentNumber - 1) }
             PanelButton(
-                "下一集 ⏭",
+                "下一集",
+                icon = Icons.Filled.SkipNext,
                 enabled = panel.episodes.any { it.number == panel.currentNumber + 1 },
                 modifier = Modifier.weight(1f),
             ) { viewModel.playEpisodeNumber(panel.currentNumber + 1) }
@@ -806,6 +967,40 @@ private fun PortraitPanel(
             }
         }
 
+        // 画面比例（采集站片源尺寸常不准：适应/裁剪/拉伸）
+        Row(Modifier.padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("画面", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.width(8.dp))
+            NagomiSegmented(
+                options = listOf("fit", "zoom", "fill"),
+                selected = resizeMode,
+                label = { when (it) { "zoom" -> "裁剪"; "fill" -> "拉伸"; else -> "适应" } },
+                onSelect = { viewModel.setResizeMode(it) },
+            )
+        }
+
+        // 睡眠定时：到点暂停；「播完本集」停在片尾且不连播（右侧实时倒计时）
+        Row(Modifier.padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("睡眠", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.width(8.dp))
+            Row(Modifier.weight(1f).horizontalScroll(rememberScrollState())) {
+                NagomiSegmented(
+                    options = PlayerViewModel.SleepChoice.entries.toList(),
+                    selected = sleepChoice,
+                    label = { it.label },
+                    onSelect = { viewModel.setSleepTimer(it) },
+                )
+            }
+            sleepRemaining?.let {
+                Text(
+                    "剩 ${formatCountdown(it)}",
+                    fontSize = 12.sp,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                    color = NagomiColors.accent,
+                )
+            }
+        }
+
         // 线路切换（多线路时；⚡最快 + API/CDN TTFB 延迟标注）
         if (routes.size > 1) {
             Row(Modifier.padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -824,21 +1019,84 @@ private fun PortraitPanel(
             }
         }
 
-        // 连播开关 + 缓存本集
+        // 连播三档：询问（95%/EOF 弹征询条）/ 自动（播完无缝续播）/ 关 + 缓存本集（本地视频无缓存语义）
         Row(
             Modifier.padding(top = 10.dp).fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("自动连播", fontSize = 13.sp)
-            Spacer(Modifier.width(6.dp))
-            Switch(
-                checked = autoplayNext,
-                onCheckedChange = { viewModel.toggleAutoplayNext() },
-                colors = SwitchDefaults.colors(checkedTrackColor = NagomiColors.accent),
-                modifier = Modifier.height(26.dp),
+            Text("连播", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.width(8.dp))
+            NagomiSegmented(
+                options = listOf("ask", "auto", "off"),
+                selected = autoplayMode,
+                label = { when (it) { "auto" -> "自动"; "off" -> "关"; else -> "询问" } },
+                onSelect = { viewModel.setAutoplayMode(it) },
             )
             Spacer(Modifier.weight(1f))
-            NagomiSecondaryButton("缓存本集") { viewModel.cacheCurrentEpisode() }
+            if (viewModel.playback?.seriesKey?.startsWith("local:") != true) {
+                NagomiSecondaryButton("缓存本集") { viewModel.cacheCurrentEpisode() }
+            }
+        }
+
+        // 一起看：与朋友同看同一集（创建/加入房间码；房主权威同步，聊天以弹幕飘过）
+        Row(Modifier.padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("一起看", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.width(8.dp))
+            Text(
+                partyStatusText(party),
+                fontSize = 13.sp,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            NagomiTextAction(
+                if (party.phase == RoomClient.Phase.JOINED) "房间" else "开始",
+                Icons.Filled.Groups,
+            ) { onOpenWatchParty() }
+        }
+
+        // 片头打点：记住 OP 结束秒（seriesKey 级，同系列各集通用），「跳过片头」胶囊与自动跳过共用
+        Row(Modifier.padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("片头", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.width(8.dp))
+            Text(
+                uiState.opEndSeconds?.let { "已打点 ${PlayerViewModel.formatTime(it)}" } ?: "未打点",
+                fontSize = 13.sp,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                "在此处设为片头结束",
+                color = NagomiColors.accent,
+                fontSize = 13.sp,
+                modifier = Modifier
+                    .minimumTouchTarget()
+                    .clickable { viewModel.markOpIntro() }
+                    .padding(horizontal = 6.dp, vertical = 4.dp),
+            )
+            if (uiState.opEndSeconds != null) {
+                Text(
+                    "清除",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 13.sp,
+                    modifier = Modifier
+                        .minimumTouchTarget()
+                        .clickable { viewModel.clearOpIntro() }
+                        .padding(horizontal = 6.dp, vertical = 4.dp),
+                )
+            }
+        }
+        Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("自动跳过片头", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.weight(1f))
+            Text(
+                if (autoSkipOp) "开" else "关",
+                color = if (autoSkipOp) NagomiColors.accent else MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 13.sp,
+                modifier = Modifier
+                    .minimumTouchTarget()
+                    .clickable { viewModel.setAutoSkipOp(!autoSkipOp) }
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+            )
         }
 
         // 选集：横向滑动条，可展开为网格（≥2 集才显示）
@@ -851,12 +1109,11 @@ private fun PortraitPanel(
                     fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
                 )
                 Spacer(Modifier.weight(1f))
-                Text(
+                NagomiTextAction(
                     if (expanded) "收起" else "展开",
-                    color = NagomiColors.accent,
+                    if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
                     fontSize = 13.sp,
-                    modifier = Modifier.clickable { expanded = !expanded },
-                )
+                ) { expanded = !expanded }
             }
             if (expanded) {
                 // 固定宽度方框（与收起态一致），切换展开时方框尺寸不变、只有行数增加，避免抖动
@@ -889,9 +1146,15 @@ private fun PortraitPanel(
     }
 }
 
-/** 面板按钮（上一集/下一集） */
+/** 面板按钮（上一集/下一集）：Material 图标 + 文字（替代 emoji 前缀） */
 @Composable
-private fun PanelButton(text: String, enabled: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+private fun PanelButton(
+    text: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    enabled: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
     Box(
         modifier
             .clip(RoundedCornerShape(8.dp))
@@ -903,13 +1166,23 @@ private fun PanelButton(text: String, enabled: Boolean, modifier: Modifier = Mod
             .padding(vertical = 10.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(
-            text,
-            fontSize = 14.sp,
-            fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,
-            color = if (enabled) MaterialTheme.colorScheme.onSurface
-            else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                icon,
+                contentDescription = null,
+                tint = if (enabled) MaterialTheme.colorScheme.onSurface
+                else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                modifier = Modifier.size(17.dp),
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                text,
+                fontSize = 14.sp,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,
+                color = if (enabled) MaterialTheme.colorScheme.onSurface
+                else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+            )
+        }
     }
 }
 
@@ -944,6 +1217,15 @@ private data class SeekHud(val delta: Double, val target: Double)
 private fun formatSeekDelta(delta: Double): String {
     val sign = if (delta >= 0) "+" else "-"
     return sign + PlayerViewModel.formatTime(abs(delta))
+}
+
+/** 睡眠定时倒计时（mm:ss，超一小时 h:mm:ss） */
+private fun formatCountdown(ms: Long): String {
+    val total = ms / 1000
+    val h = total / 3600
+    val m = (total % 3600) / 60
+    val s = total % 60
+    return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%d:%02d".format(m, s)
 }
 
 /** 线路标签：⚡ 前缀 = 探测延迟最低的线路；有探测结果时附 TTFB（探测中/单线路不显示） */

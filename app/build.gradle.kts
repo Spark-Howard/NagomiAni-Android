@@ -15,8 +15,8 @@ android {
         applicationId = "com.sparkhoward.nagomiani"
         minSdk = 26
         targetSdk = 35
-        versionCode = 9
-        versionName = "0.6.0"
+        versionCode = 11
+        versionName = "0.7.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -97,6 +97,7 @@ dependencies {
     implementation(libs.androidx.media3.exoplayer.hls)
     implementation(libs.androidx.media3.ui)
     implementation(libs.androidx.media3.database)
+    implementation(libs.androidx.documentfile) // SAF 本地媒体库目录遍历
     implementation(libs.okhttp)
     implementation(libs.okhttp.dnsoverhttps)
     implementation(libs.okhttp.logging)

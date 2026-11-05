@@ -1,0 +1,16 @@
+{
+  "name": "nagomiani-watchparty-relay",
+  "version": "0.1.0",
+  "private": true,
+  "description": "NagomiAni 一起看最小 WebSocket 中继：按房间码转发消息，无业务逻辑、无持久化",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "ws": "^8.17.0"
+  }
+}

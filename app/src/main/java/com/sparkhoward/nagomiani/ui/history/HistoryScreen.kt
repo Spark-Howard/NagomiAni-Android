@@ -22,6 +22,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material.icons.filled.Backup
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.History
@@ -416,11 +418,13 @@ private fun StatsTab(viewModel: HistoryViewModel) {
                             "导出备份",
                             modifier = Modifier.weight(1f),
                             enabled = !backupBusy,
+                            icon = Icons.Filled.Upload,
                         ) { viewModel.exportBackup() }
                         com.sparkhoward.nagomiani.ui.theme.NagomiSecondaryButton(
                             "导入恢复",
                             modifier = Modifier.weight(1f),
                             enabled = !backupBusy,
+                            icon = Icons.Filled.Download,
                         ) { confirmImport = true }
                     }
                     backupMessage?.let {

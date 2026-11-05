@@ -25,7 +25,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Save
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -41,7 +44,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -55,6 +57,8 @@ import com.sparkhoward.nagomiani.ui.theme.NagomiColors
 import com.sparkhoward.nagomiani.ui.theme.NagomiPrimaryButton
 import com.sparkhoward.nagomiani.ui.theme.NagomiSectionHeader
 import com.sparkhoward.nagomiani.ui.theme.NagomiSegmented
+import com.sparkhoward.nagomiani.ui.theme.NagomiTextAction
+import com.sparkhoward.nagomiani.ui.theme.NagomiPillAction
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -66,6 +70,7 @@ import java.util.UUID
 fun BangumiScreen(
     onOpenDetail: (Int) -> Unit,
     onOpenLogin: () -> Unit,
+    onOpenSettings: () -> Unit = {},
     viewModel: BangumiViewModel = viewModel(),
 ) {
     val state by viewModel.state.collectAsState()
@@ -85,6 +90,15 @@ fun BangumiScreen(
             ) {
                 Text("追番", style = MaterialTheme.typography.titleLarge)
                 Spacer(Modifier.weight(1f))
+                // 设置中心入口（主题/通知/代理/缓存等收敛在此）
+                androidx.compose.material3.IconButton(onClick = onOpenSettings, modifier = Modifier.size(32.dp)) {
+                    Icon(
+                        Icons.Filled.Settings,
+                        "设置",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
                 if (state.refreshing || state.collectionsLoading) {
                     CircularProgressIndicator(color = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
                 } else {
@@ -123,7 +137,12 @@ fun BangumiScreen(
                     state.error?.let {
                         Text(it, color = MaterialTheme.colorScheme.error, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
                     }
-                    ProxySection(viewModel)
+                    Text(
+                        "登录或搜索连不上？到右上「设置 › 网络」配置应用内代理。",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 14.dp),
+                    )
                 }
             }
 
@@ -145,37 +164,11 @@ fun BangumiScreen(
                             Text(state.user?.nickname ?: "", style = MaterialTheme.typography.titleMedium)
                             Text("@${state.user?.username}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
-                        Text(
+                        NagomiPillAction(
                             "退出登录",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontSize = 13.sp,
-                            modifier = Modifier.clickable { viewModel.logout { } },
-                        )
-                    }
-                }
-                // 今日更新提醒开关（DailyAiringNotifier 每日检查在看的新番是否更新）
-                item {
-                    val notifyOn by viewModel.notifyEnabled.collectAsState()
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 2.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text(stringResource(com.sparkhoward.nagomiani.R.string.notify_toggle_label), fontSize = 13.sp)
-                            Text(
-                                stringResource(com.sparkhoward.nagomiani.R.string.notify_toggle_hint),
-                                fontSize = 11.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        androidx.compose.material3.Switch(
-                            checked = notifyOn,
-                            onCheckedChange = { viewModel.toggleNotify(it) },
-                            colors = androidx.compose.material3.SwitchDefaults.colors(checkedTrackColor = NagomiColors.accent),
-                            modifier = Modifier.height(26.dp),
-                        )
+                            Icons.AutoMirrored.Filled.Logout,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        ) { viewModel.logout { } }
                     }
                 }
                 item {
@@ -288,43 +281,6 @@ fun BangumiScreen(
             }
         }
     }
-    }
-}
-
-@Composable
-private fun ProxySection(viewModel: BangumiViewModel) {
-    val draft by viewModel.proxyDraft.collectAsState()
-    val message by viewModel.proxyMessage.collectAsState()
-    Column(Modifier.padding(top = 20.dp)) {
-        Text("网络代理（搜索/登录不上时配置）", style = MaterialTheme.typography.titleMedium)
-        Text(
-            "bgm.tv 在部分网络下被 DNS 污染。填电脑上代理的局域网地址即可，" +
-                "例如 192.168.1.5:7890（电脑代理需开「允许局域网连接」）。清空保存恢复直连。",
-            fontSize = 12.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(vertical = 6.dp),
-        )
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            androidx.compose.material3.OutlinedTextField(
-                value = draft,
-                onValueChange = { viewModel.proxyDraft.value = it },
-                placeholder = { Text("192.168.1.5:7890", fontSize = 13.sp) },
-                singleLine = true,
-                modifier = Modifier.weight(1f),
-            )
-            Text(
-                "保存",
-                color = MaterialTheme.colorScheme.primary,
-                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
-                fontSize = 14.sp,
-                modifier = Modifier
-                    .clickable { viewModel.saveProxy() }
-                    .padding(start = 12.dp, top = 8.dp, bottom = 8.dp),
-            )
-        }
-        message?.let {
-            Text(it, fontSize = 12.sp, color = NagomiColors.watchedGreen, modifier = Modifier.padding(top = 4.dp))
-        }
     }
 }
 

@@ -1,0 +1,63 @@
+{
+  "id": 265,
+  "name": "新世紀エヴァンゲリオン",
+  "name_cn": "新世纪福音战士",
+  "air_date": "1995-10-04",
+  "eps": [
+    {"id": 4819, "type": 0, "sort": 1.0, "name": "第壱話"}
+  ],
+  "crt": [
+    {
+      "id": 302,
+      "url": "http://bgm.tv/character/302",
+      "name": "碇シンジ",
+      "name_cn": "碇真嗣",
+      "role_name": "主角",
+      "images": {
+        "large": "http://lain.bgm.tv/pic/crt/l/e1/af/302_crt_ce4yO.jpg",
+        "medium": "http://lain.bgm.tv/pic/crt/m/e1/af/302_crt_ce4yO.jpg",
+        "small": "http://lain.bgm.tv/pic/crt/s/e1/af/302_crt_ce4yO.jpg",
+        "grid": "http://lain.bgm.tv/pic/crt/g/e1/af/302_crt_ce4yO.jpg"
+      },
+      "comment": 238,
+      "collects": 799,
+      "info": {"gender": "男", "birth": "2001年6月6日"},
+      "actors": [{"id": 4054, "url": "http://bgm.tv/person/4054", "name": "緒方恵美", "images": null}]
+    },
+    {
+      "id": 304,
+      "name": "アスカ・ラングレー",
+      "name_cn": "明日香·兰格雷",
+      "role_name": "主角",
+      "images": null,
+      "comment": 0,
+      "collects": 0
+    }
+  ],
+  "staff": [
+    {
+      "id": 93,
+      "url": "http://bgm.tv/person/93",
+      "name": "GAINAX",
+      "name_cn": "GAINAX",
+      "role_name": "",
+      "images": {"grid": "http://lain.bgm.tv/pic/crt/g/73/e1/93_prsn_rvEE8.jpg"},
+      "comment": 163,
+      "collects": 0,
+      "jobs": ["原作"]
+    },
+    {
+      "id": 94,
+      "url": "http://bgm.tv/person/94",
+      "name": "庵野秀明",
+      "name_cn": "庵野秀明",
+      "role_name": "",
+      "images": null,
+      "comment": 246,
+      "collects": 0,
+      "jobs": ["原作", "导演", "脚本"]
+    }
+  ],
+  "topic": [],
+  "blog": []
+}

@@ -75,6 +75,7 @@ object Routes {
     const val DETAIL = "detail/{subjectID}"
     const val PLAYER = "player"
     const val LOGIN = "login"
+    const val SETTINGS = "settings"
 
     fun detail(subjectID: Int) = "detail/$subjectID"
 }
@@ -328,7 +329,11 @@ private fun NagomiNavHost(routeRequest: androidx.compose.runtime.MutableState<Ro
                     )
                 }
                 composable(Routes.BANGUMI) {
-                    BangumiScreen(onOpenDetail = { navController.navigate(Routes.detail(it)) }, onOpenLogin = { navController.navigate(Routes.LOGIN) })
+                    BangumiScreen(
+                        onOpenDetail = { navController.navigate(Routes.detail(it)) },
+                        onOpenLogin = { navController.navigate(Routes.LOGIN) },
+                        onOpenSettings = { navController.navigate(Routes.SETTINGS) },
+                    )
                 }
                 composable(Routes.CACHE) {
                     com.sparkhoward.nagomiani.ui.cache.CacheScreen(onPlay = { navController.navigate(Routes.PLAYER) })
@@ -367,6 +372,14 @@ private fun NagomiNavHost(routeRequest: androidx.compose.runtime.MutableState<Ro
                 }
                 composable(Routes.LOGIN) {
                     com.sparkhoward.nagomiani.ui.bangumi.LoginScreen(onDone = { navController.popBackStack() })
+                }
+                composable(
+                    Routes.SETTINGS,
+                    // 二级页与详情同款：右滑入、返回滑出
+                    enterTransition = { slideInHorizontally(tween(300)) { it } },
+                    popExitTransition = { slideOutHorizontally(tween(300)) { it } },
+                ) {
+                    com.sparkhoward.nagomiani.ui.settings.SettingsScreen(onBack = { navController.popBackStack() })
                 }
             }
             // 应用内悬浮小窗：覆盖在所有页面之上（不遮底部导航栏）

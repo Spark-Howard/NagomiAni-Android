@@ -52,4 +52,36 @@ class BangumiWireTest {
         assertTrue("type 应为 2（看过），实际 ${c.type}") { c.type == 2 }
         assertTrue("ep_status 不为负，实际 ${c.epStatus}") { c.epStatus >= 0 }
     }
+
+    /** 真实「角色/制作人员」响应（/subject/{id}?responseGroup=large 的 crt/staff）——
+     *  role_name（角色身份；制作常为空串）+ jobs（制作职位数组）映射，
+     *  actors/info/topic/blog 等大字段必须能被 ignoreUnknownKeys 无损忽略 */
+    @Test fun parsesSubjectCastsFromRealPayload() {
+        val text = javaClass.getResourceAsStream("/subject_casts_sample.json")!!
+            .readBytes().decodeToString()
+        val json = kotlinx.serialization.json.Json {
+            ignoreUnknownKeys = true
+            isLenient = true
+            coerceInputValues = true
+            explicitNulls = false
+        }
+        val c = json.decodeFromString(
+            com.sparkhoward.nagomiani.core.model.SubjectCasts.serializer(),
+            text,
+        )
+        assertTrue("crt 应 2 位，实际 ${c.crt.size}") { c.crt.size == 2 }
+        assertTrue("staff 应 2 位，实际 ${c.staff.size}") { c.staff.size == 2 }
+        val shinji = c.crt[0]
+        assertTrue("角色中文名应为 碇真嗣，实际 ${shinji.displayName}") { shinji.displayName == "碇真嗣" }
+        assertTrue("角色身份应为主角，实际 ${shinji.roleText}") { shinji.roleText == "主角" }
+        assertTrue("角色头像应取到 medium 档，实际 ${shinji.images?.bestURL()}") {
+            shinji.images?.bestURL()?.contains("/crt/m/") == true
+        }
+        val anno = c.staff[1]
+        assertTrue("制作中文名应为 庵野秀明，实际 ${anno.displayName}") { anno.displayName == "庵野秀明" }
+        assertTrue("制作职位应拼串，实际 ${anno.roleText}") { anno.roleText == "原作 / 导演 / 脚本" }
+        assertTrue("images 缺失的条目不崩且中文名兜底，实际 ${c.staff[0].displayName}") {
+            c.staff[0].displayName == "GAINAX"
+        }
+    }
 }

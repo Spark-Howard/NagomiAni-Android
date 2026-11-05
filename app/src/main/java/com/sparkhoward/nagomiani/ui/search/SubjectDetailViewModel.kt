@@ -15,6 +15,7 @@ import com.sparkhoward.nagomiani.core.model.Episode
 import com.sparkhoward.nagomiani.core.model.OnlineEpisode
 import com.sparkhoward.nagomiani.core.model.OnlineShow
 import com.sparkhoward.nagomiani.core.model.Subject
+import com.sparkhoward.nagomiani.core.model.SubjectCasts
 import com.sparkhoward.nagomiani.core.store.AppStore
 import com.sparkhoward.nagomiani.player.PlaybackBus
 import kotlinx.coroutines.Dispatchers
@@ -25,6 +26,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.time.LocalDate
 import java.time.ZoneId
 
@@ -71,6 +73,11 @@ class SubjectDetailViewModel(app: Application) : AndroidViewModel(app) {
         val watchedNumbers: Set<Int> = emptySet(),
         /** 未放送集号 → 官方 airdate（放送门禁：在线源里这些集置灰禁播，开播当天自动解禁） */
         val unairedEpisodes: Map<Int, String> = emptyMap(),
+        /** 角色/制作人员（legacy 大条目）：静态数据独立加载，不阻塞页面主链路；双空且无错误时整块隐藏 */
+        val casts: SubjectCasts? = null,
+        val castsLoading: Boolean = false,
+        /** 加载失败原因（亮出，提供重试；不再静默吞成「没有角色」） */
+        val castsError: String? = null,
     )
 
     val state = MutableStateFlow(State())
@@ -153,6 +160,7 @@ class SubjectDetailViewModel(app: Application) : AndroidViewModel(app) {
                 )
                 loadBookmarked()
                 loadEpisodeMeta(subjectID)
+                loadCasts(subjectID) // 独立协程，与片源搜索并发
                 searchSources(subject.displayName)
             } catch (e: Exception) {
                 state.value = state.value.copy(loading = false, error = "加载失败：${e.message}")
@@ -302,6 +310,30 @@ class SubjectDetailViewModel(app: Application) : AndroidViewModel(app) {
     fun retrySources() {
         val title = current?.displayName ?: return
         viewModelScope.launch { searchSources(title, useCache = false) }
+    }
+
+    /** 角色/制作人员（legacy 大条目 crt/staff，公开端点无需登录态）：独立协程并发加载。
+     *  静态数据——sameSubject 静默刷新不重拉，重进同一条目不重复请求。
+     *  响应可达 MB 级（长篇的分集/角色数组全量返回），整体放 IO 线程避免主线程解析卡顿 */
+    private fun loadCasts(subjectID: Int) {
+        state.value = state.value.copy(castsLoading = true, castsError = null)
+        viewModelScope.launch {
+            try {
+                val casts = withContext(Dispatchers.IO) { BangumiApi { null }.subjectCasts(subjectID) }
+                state.value = state.value.copy(castsLoading = false, casts = casts)
+            } catch (e: Exception) {
+                state.value = state.value.copy(
+                    castsLoading = false,
+                    castsError = "角色信息加载失败：${BangumiError.describe(e)}",
+                )
+            }
+        }
+    }
+
+    /** 角色区手动重试 */
+    fun retryCasts() {
+        val id = current?.id ?: return
+        loadCasts(id)
     }
 
     /** 该番在当前片源列表里的总集数（入库播种「已看基线」用：否则更新提醒/角标无从判新） */

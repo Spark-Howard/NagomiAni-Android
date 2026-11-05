@@ -1,5 +1,9 @@
 package com.sparkhoward.nagomiani.ui.cache
 
+import android.net.Uri
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -18,10 +22,16 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.DownloadDone
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -36,11 +46,13 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -48,10 +60,14 @@ import androidx.compose.ui.unit.sp
 import androidx.media3.exoplayer.offline.Download
 import com.sparkhoward.nagomiani.AppGraph
 import com.sparkhoward.nagomiani.core.download.DownloadUtil
+import com.sparkhoward.nagomiani.core.local.LocalMediaLibrary
 import com.sparkhoward.nagomiani.player.PlaybackBus
 import com.sparkhoward.nagomiani.ui.theme.NagomiAsyncImage
 import com.sparkhoward.nagomiani.ui.theme.NagomiColors
+import com.sparkhoward.nagomiani.ui.theme.NagomiPillAction
 import com.sparkhoward.nagomiani.ui.theme.NagomiSectionHeader
+import com.sparkhoward.nagomiani.ui.theme.NagomiTextAction
+import kotlinx.coroutines.launch
 
 /** 缓存列表行：resumeKey = "online:站:番:集号"，番名/集号从中解析 */
 private data class CacheRow(
@@ -105,6 +121,26 @@ fun CacheScreen(onPlay: () -> Unit = {}) {
     var selected by remember { mutableStateOf(emptySet<String>()) }
     var confirmKeys by remember { mutableStateOf<Set<String>?>(null) }
 
+    // 本地媒体（SAF）：目录授权 + 扫描；点击文件惰性解析（16MB 指纹 → dandanplay 匹配）后起播
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val localState by LocalMediaLibrary.state.collectAsState()
+    LaunchedEffect(Unit) { LocalMediaLibrary.refresh(context) }
+    val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        uri?.let { scope.launch { LocalMediaLibrary.addFolder(context, it) } }
+    }
+    val launchLocal: (LocalMediaLibrary.LocalMediaItem) -> Unit = { file ->
+        scope.launch {
+            val playback = LocalMediaLibrary.preparePlayback(context, file)
+            if (playback != null) {
+                PlaybackBus.launch(playback)
+                onPlay()
+            } else {
+                Toast.makeText(context, "无法读取该文件（可能已被移动或权限丢失）", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
     Column(Modifier.fillMaxSize()) {
         // 固定顶栏（不随列表滚动）：标题 / 多选操作条
         Row(
@@ -119,50 +155,35 @@ fun CacheScreen(onPlay: () -> Unit = {}) {
                     color = NagomiColors.accent,
                     modifier = Modifier.weight(1f),
                 )
-                Text(
+                NagomiTextAction(
                     "全选",
-                    fontSize = 13.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier
-                        .clickable { selected = rows.map { it.resumeKey }.toSet() }
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
-                )
-                Text(
+                    Icons.Filled.DoneAll,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                ) { selected = rows.map { it.resumeKey }.toSet() }
+                NagomiTextAction(
                     "删除",
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = if (selected.isEmpty()) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-                    else MaterialTheme.colorScheme.error,
-                    modifier = Modifier
-                        .clickable(enabled = selected.isNotEmpty()) { confirmKeys = selected }
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
-                )
-                Text(
+                    Icons.Filled.Delete,
+                    tint = MaterialTheme.colorScheme.error,
+                    enabled = selected.isNotEmpty(),
+                ) { confirmKeys = selected }
+                NagomiTextAction(
                     "取消",
-                    fontSize = 13.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier
-                        .clickable {
-                            selecting = false
-                            selected = emptySet()
-                        }
-                        .padding(start = 8.dp),
-                )
+                    Icons.Filled.Close,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                ) {
+                    selecting = false
+                    selected = emptySet()
+                }
             } else {
                 Text("离线缓存", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
                 if (rows.isNotEmpty()) {
-                    Text(
+                    NagomiTextAction(
                         "管理",
-                        fontSize = 13.sp,
-                        color = NagomiColors.accent,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier
-                            .clickable {
-                                selecting = true
-                                selected = emptySet()
-                            }
-                            .padding(horizontal = 8.dp, vertical = 4.dp),
-                    )
+                        Icons.Filled.Edit,
+                    ) {
+                        selecting = true
+                        selected = emptySet()
+                    }
                 }
             }
         }
@@ -219,6 +240,63 @@ fun CacheScreen(onPlay: () -> Unit = {}) {
                 )
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline, modifier = Modifier.padding(horizontal = 16.dp))
             }
+        }
+        // 本地媒体：SAF 目录里的视频文件，点击播放（首次点击算指纹匹配弹幕）
+        item {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                NagomiSectionHeader(
+                    "本地媒体",
+                    Icons.Filled.Folder,
+                    Modifier.padding(top = if (rows.isEmpty()) 0.dp else 16.dp),
+                )
+                Spacer(Modifier.weight(1f))
+                NagomiPillAction("添加目录", Icons.Filled.Add) { folderPicker.launch(null) }
+            }
+        }
+        if (localState.folders.isNotEmpty()) {
+            items(localState.folders, key = { "folder:$it" }) { folder ->
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        folderDisplayName(folder),
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (localState.scanning) {
+                        Text("扫描中…", fontSize = 11.sp, color = NagomiColors.accent)
+                    }
+                    IconButton(onClick = { scope.launch { LocalMediaLibrary.removeFolder(context, folder) } }) {
+                        Icon(Icons.Filled.Close, "移除目录", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
+                    }
+                }
+            }
+        }
+        if (localState.files.isEmpty()) {
+            if (!localState.scanning) {
+                item {
+                    Text(
+                        "添加一个目录，即可播放手机里的本地视频（自动按文件指纹匹配弹幕）。",
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                    )
+                }
+            }
+        }
+        items(localState.files, key = { it.uri }) { file ->
+            LocalMediaRow(
+                file,
+                resolving = localState.resolvingUri == file.uri,
+            ) { launchLocal(file) }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline, modifier = Modifier.padding(horizontal = 16.dp))
         }
         item { Spacer(Modifier.size(24.dp)) }
         }
@@ -364,4 +442,80 @@ private fun statusLabel(row: CacheRow): String = when {
     // 清单尚未解析完时 percent = -1（未知），不能显示成负数百分比
     row.item.percent < 0f -> "准备中"
     else -> "${row.item.percent.toInt()}%"
+}
+
+/** 目录树 URI 的显示名："content://…/tree/primary%3AMovies" → "Movies" */
+private fun folderDisplayName(treeUri: String): String = runCatching {
+    java.net.URLDecoder.decode(Uri.parse(treeUri).lastPathSegment.orEmpty(), "UTF-8")
+        .substringAfterLast('/')
+        .substringAfterLast(':')
+        .ifEmpty { "目录" }
+}.getOrDefault("目录")
+
+private fun localSizeLabel(bytes: Long): String = when {
+    bytes >= 1 shl 30 -> "%.1f GB".format(bytes / 1073741824.0)
+    bytes >= 1 shl 20 -> "%.0f MB".format(bytes / 1048576.0)
+    else -> "${bytes} KB"
+}
+
+/** 本地文件行：视频图标占位（本地文件无封面）+ 名称/大小/匹配状态，点击解析并起播 */
+@Composable
+private fun LocalMediaRow(
+    file: LocalMediaLibrary.LocalMediaItem,
+    resolving: Boolean,
+    onLaunch: () -> Unit,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(enabled = !resolving, onClick = onLaunch)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier
+                .width(44.dp)
+                .aspectRatio(0.7f)
+                .clip(RoundedCornerShape(6.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                Icons.Filled.Movie,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp),
+            )
+        }
+        Column(Modifier.weight(1f).padding(start = 10.dp)) {
+            Text(file.displayName, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                buildString {
+                    append(localSizeLabel(file.sizeBytes))
+                    file.meta?.takeIf { it.animeTitle != null }?.let {
+                        append("  ·  已匹配《${it.animeTitle}》第 ${it.episodeNumber} 集")
+                    }
+                    file.meta?.takeIf { it.animeTitle == null }?.let { append("  ·  未匹配弹幕") }
+                },
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Text(
+            when {
+                resolving -> "解析中…"
+                file.meta != null -> "可播放"
+                else -> "点击解析"
+            },
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = when {
+                resolving -> NagomiColors.accent
+                file.meta != null -> NagomiColors.watchedGreen
+                else -> MaterialTheme.colorScheme.onSurfaceVariant
+            },
+        )
+    }
 }
