@@ -80,9 +80,12 @@ class RoomClient(private val scope: CoroutineScope) {
     private var pingJob: Job? = null
     private var lastPingSentAt = 0L
 
-    /** 全局 Http client + 15s 协议层心跳（继承分层 DNS/代理能力） */
+    /** 独立 WS client + 15s 协议层心跳。强制直连（NO_PROXY）：一起看连的是局域网房主手机或
+     *  用户自填的中继，走应用内代理会被隧道到代理机器上（目标端口在手机/局域网，代理侧必然
+     *  连不通，真机复现为 unexpected end of stream）；继承 Http.client 是要保留其 DNS/超时基线 */
     private val wsClient: OkHttpClient = Http.client.newBuilder()
         .pingInterval(15, TimeUnit.SECONDS)
+        .proxy(java.net.Proxy.NO_PROXY)
         .build()
 
     /** 创建/加入房间：URL 允许带或不带 ws:// 前缀；同码重复调用会先干净断开旧连接 */

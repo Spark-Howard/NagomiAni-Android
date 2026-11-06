@@ -35,7 +35,8 @@ sealed interface PartyWire {
     data class Members(val host: String, val members: List<PartyMember> = emptyList()) : PartyWire
 
     /** 房主 → 全员：权威播放状态。wall=发送时刻（guest 推算落位）；
-     *  epoch 在 seek/换集等不连续点自增，guest 见到更大值立即硬对齐 */
+     *  epoch 在 seek/换集等不连续点自增，guest 见到更大值立即硬对齐。
+     *  from 由 relay 转发时附加（发送者 id），客户端自己发时省略 */
     @Serializable
     @SerialName("state")
     data class State(
@@ -45,17 +46,18 @@ sealed interface PartyWire {
         val epoch: Long = 0,
         val episodeNumber: Int = 0,
         val subjectId: Int? = null,
+        val from: String? = null,
     ) : PartyWire
 
-    /** 任意成员 → 全员：聊天（各端以弹幕样式飘出） */
+    /** 任意成员 → 全员：聊天（各端以弹幕样式飘出）。from 同上由 relay 附加 */
     @Serializable
     @SerialName("chat")
-    data class Chat(val nick: String, val text: String) : PartyWire
+    data class Chat(val nick: String, val text: String, val from: String? = null) : PartyWire
 
-    /** guest → 全员（房主消费）：请求一次状态广播（入房/重连后对齐） */
+    /** guest → 全员（房主消费）：请求一次状态广播（入房/重连后对齐）。from 同上 */
     @Serializable
     @SerialName("sync")
-    data class Sync(val at: Long = 0) : PartyWire
+    data class Sync(val at: Long = 0, val from: String? = null) : PartyWire
 
     /** 应用层 ping（测 RTT）；relay 单播回 pong */
     @Serializable

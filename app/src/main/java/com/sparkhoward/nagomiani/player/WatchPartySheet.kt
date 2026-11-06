@@ -72,6 +72,14 @@ fun WatchPartySheet(
     var chatInput by remember { mutableStateOf("") }
     val clipboard = LocalClipboardManager.current
 
+    // 弹层打开期间扫描附近的房间（未入房时）；关闭弹层即停
+    LaunchedEffect(party.phase) {
+        if (party.phase == RoomClient.Phase.IDLE) viewModel.startNearbyDiscovery()
+    }
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        onDispose { viewModel.stopNearbyDiscovery() }
+    }
+
     Column(
         Modifier
             .fillMaxWidth()
@@ -224,22 +232,61 @@ fun WatchPartySheet(
                 PartyField(
                     value = nick,
                     onValueChange = { nick = it },
-                    hint = "昵称（房间内展示）",
+                    hint = "昵称（默认用 Bangumi 昵称）",
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(top = 10.dp),
                 )
+
+                // 附近房间（局域网自动发现，点一下即入房，零输入）
+                val nearbyRooms by viewModel.nearbyRooms.collectAsState()
+                if (nearbyRooms.isNotEmpty()) {
+                    Text(
+                        "附近的房间",
+                        color = LabelColor,
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(top = 10.dp),
+                    )
+                    nearbyRooms.forEach { room ->
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(top = 6.dp)
+                                .background(Color.White.copy(alpha = 0.08f), RoundedCornerShape(10.dp))
+                                .clickable { viewModel.joinDiscoveredRoom(room, nick.ifBlank { "路人" }) }
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                room.roomCode,
+                                color = NagomiColors.accent,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold,
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                "${room.hostNick} 的房间 · 点击加入",
+                                color = Color.White.copy(alpha = 0.85f),
+                                fontSize = 13.sp,
+                                maxLines = 1,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                    }
+                }
+
                 PartyField(
                     value = server,
                     onValueChange = { server = it },
-                    hint = "中继服务器 ws(s)://host:port（自建，见 server/README）",
+                    hint = "中继服务器（可选，异地看才需要，ws(s)://…）",
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(top = 8.dp),
                 )
 
                 Row(Modifier.padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                    // 创建房间：本地生成 6 位房间码
+                    // 创建房间：留空地址=本机开局（局域网）；填了=走自建中继（可异地）
                     Text(
                         "创建房间",
                         color = Color.White,
@@ -256,7 +303,7 @@ fun WatchPartySheet(
                     PartyField(
                         value = code,
                         onValueChange = { code = it.uppercase() },
-                        hint = "房间码",
+                        hint = "朋友给的房间码",
                         modifier = Modifier.weight(1f),
                         capitalization = KeyboardCapitalization.Characters,
                     )
@@ -276,7 +323,7 @@ fun WatchPartySheet(
                 }
 
                 Text(
-                    "一人创建房间拿到房间码，朋友「加入」输码同看；各人用自己的片源/弹幕，只有进度同步。",
+                    "同一 WiFi：一人创建、朋友点「附近的房间」或输码即入。异地：房主填服务器地址创建，朋友同地址+房间码加入。各人用自己的片源/弹幕，只同步进度。",
                     color = LabelColor,
                     fontSize = 11.sp,
                     modifier = Modifier.padding(top = 8.dp, bottom = 2.dp),
