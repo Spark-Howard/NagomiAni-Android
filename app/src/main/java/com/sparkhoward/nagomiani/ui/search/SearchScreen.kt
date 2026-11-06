@@ -81,7 +81,6 @@ import com.sparkhoward.nagomiani.core.model.Subject
 import com.sparkhoward.nagomiani.ui.theme.NagomiAsyncImage
 import com.sparkhoward.nagomiani.ui.theme.NagomiBadge
 import com.sparkhoward.nagomiani.ui.theme.NagomiColors
-import com.sparkhoward.nagomiani.ui.theme.NagomiSectionHeader
 import com.sparkhoward.nagomiani.ui.theme.NagomiPillAction
 import com.sparkhoward.nagomiani.ui.theme.NagomiSkeletonBox
 import com.sparkhoward.nagomiani.ui.theme.NagomiTextAction
@@ -189,29 +188,56 @@ private fun WeeklySection(state: SearchViewModel.State, viewModel: SearchViewMod
             ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_CALENDAR) == PackageManager.PERMISSION_GRANTED
 
     Column(Modifier.fillMaxSize()) {
-        // 刷新栏：固定在屏幕上方
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            NagomiSectionHeader("新番放送（近一周 · 未来一周）", Icons.Filled.CalendarMonth, Modifier.weight(1f))
-            state.weeklyFetchedAt?.let {
-                Text("更新于 $it", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            NagomiPillAction(
-                if (state.calendarExporting) "导出中…" else "导出日历",
-                Icons.Filled.Event,
-                enabled = !state.calendarExporting,
-            ) {
-                if (hasCalendarPermission) {
-                    viewModel.exportCalendar()
-                } else {
-                    calendarPermission.launch(
-                        arrayOf(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR),
+        // 周历头部：标题行（短标题 + 右侧动作胶囊）+ 副题行（范围/更新时间小字）。
+        // 标题只占「新番放送」四字、说明性文字全部下沉副题行——大字号下也不会折行挤压
+        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        Modifier
+                            .size(width = 4.dp, height = 16.dp)
+                            .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(2.dp)),
+                    )
+                    Icon(
+                        Icons.Filled.CalendarMonth,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(start = 8.dp).size(16.dp),
+                    )
+                    Text(
+                        "新番放送",
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(start = 6.dp),
                     )
                 }
+                NagomiPillAction(
+                    if (state.calendarExporting) "导出中…" else "导出日历",
+                    Icons.Filled.Event,
+                    enabled = !state.calendarExporting,
+                ) {
+                    if (hasCalendarPermission) {
+                        viewModel.exportCalendar()
+                    } else {
+                        calendarPermission.launch(
+                            arrayOf(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR),
+                        )
+                    }
+                }
+                Spacer(Modifier.width(6.dp))
+                NagomiPillAction("刷新", Icons.Filled.Refresh) { viewModel.loadWeekly() }
             }
-            NagomiPillAction("刷新", Icons.Filled.Refresh) { viewModel.loadWeekly() }
+            // 副题：范围 + 更新时间（与标题文字左对齐：竖条4 + 图标距8 + 图标16 + 文字距6 = 34dp）
+            Text(
+                buildString {
+                    append("近一周 · 未来一周")
+                    state.weeklyFetchedAt?.let { append(" · 更新于 $it") }
+                },
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 34.dp, top = 2.dp),
+            )
         }
         // 导出结果/错误/权限提示（紧跟刷新栏，始终可见）
         state.calendarExportStatus?.let {
