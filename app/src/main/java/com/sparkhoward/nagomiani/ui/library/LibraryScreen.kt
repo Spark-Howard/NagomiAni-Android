@@ -100,6 +100,13 @@ fun LibraryScreen(
             }
         }
 
+        // 一起看全局入口：朋友不用进播放器就能输房间码/点附近房间
+        item {
+            com.sparkhoward.nagomiani.player.WatchPartyEntryCard(
+                Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
+            )
+        }
+
         // 片源健康：站点测速（延迟/可达性/最快标记）+ 自加站点管理
         item {
             SourceHealthPanel(

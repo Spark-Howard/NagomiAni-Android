@@ -23,6 +23,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Logout
 import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -125,6 +126,26 @@ fun WatchPartySheet(
                             .clickable {
                                 clipboard.setText(AnnotatedString(party.roomCode))
                                 viewModel.showStatus("房间码已复制，去分享吧")
+                            },
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    // 系统分享：朋友点开文本按提示输码，不必自己找入口
+                    val context = androidx.compose.ui.platform.LocalContext.current
+                    androidx.compose.material3.Icon(
+                        Icons.Filled.Share,
+                        "分享房间",
+                        tint = NagomiColors.accent,
+                        modifier = Modifier
+                            .size(18.dp)
+                            .clickable {
+                                val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                                    type = "text/plain"
+                                    putExtra(
+                                        android.content.Intent.EXTRA_TEXT,
+                                        "来 NagomiAni 一起看！房间码 ${party.roomCode}\n打开 App → 搜索/番库页「一起看」卡片 → 输入房间码加入",
+                                    )
+                                }
+                                context.startActivity(android.content.Intent.createChooser(intent, "分享房间"))
                             },
                     )
                     Spacer(Modifier.weight(1f))

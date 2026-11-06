@@ -116,6 +116,9 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     private val _partyChat = MutableStateFlow<List<PartyChatEntry>>(emptyList())
     val partyChat: StateFlow<List<PartyChatEntry>> = _partyChat.asStateFlow()
 
+    /** 房主正在看的集号（guest 的全局入口卡提示「去播第 N 集」用；null=未知） */
+    val partyHostEpisode = MutableStateFlow<Int?>(null)
+
     init {
         val s = danmakuSettings
         viewModelScope.launch {
@@ -205,6 +208,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
                     is RoomClient.Event.HostState -> {
                         hostState = ev.state
                         hostStateAt = System.currentTimeMillis()
+                        partyHostEpisode.value = ev.state.episodeNumber.takeIf { it > 0 }
                         // 房主换了集：guest 各自手动跟上（MVP 不同步换集动作，只提示）
                         val mine = playback?.episodeNumber ?: -1
                         if (mine > 0 && ev.state.episodeNumber > 0 && ev.state.episodeNumber != mine) {
@@ -1062,6 +1066,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         partyExpectedRole = null
         partyWasHost = false
         partySpeedActive = false
+        partyHostEpisode.value = null
         _partyChat.value = emptyList()
         if (message != null) showStatus(message)
     }
@@ -1130,6 +1135,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     private fun onPartyWelcome(ev: RoomClient.Event.Welcome) {
         appliedHostEpoch = -1L
         hostState = null
+        partyHostEpisode.value = null
         partyWasHost = ev.selfId == ev.hostId
         if (ev.selfId == ev.hostId) {
             if (partyExpectedRole == RoomClient.Role.GUEST) {
