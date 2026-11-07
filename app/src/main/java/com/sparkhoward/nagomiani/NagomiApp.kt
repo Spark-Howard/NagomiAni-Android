@@ -39,7 +39,32 @@ class NagomiApp : Application(), ImageLoaderFactory {
         createDailyAiringChannel()
         // 小部件后台刷新周期任务（幂等注册，KEEP 不重置周期；重启后 WorkManager 自动恢复）
         com.sparkhoward.nagomiani.ui.widget.WidgetRefreshWorker.ensureScheduled(this)
+        if (BuildConfig.DEBUG) installMainThreadWatchdog()
     }
+
+    /** debug 构建的主线程卡死看门狗：3s 无响应即把主线程栈打进 logcat（ANR 前就能定位阻塞点）。
+     *  探测 = 往主线程 post 置位标记，后台线程轮询超时未置位即采样 dump */
+    private fun installMainThreadWatchdog() {
+        val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+        val mainThread = android.os.Looper.getMainLooper().thread
+        val probe = Runnable { watchdog.probeAcknowledged = true }
+        Thread({
+            while (true) {
+                watchdog.probeAcknowledged = false
+                mainHandler.post(probe)
+                Thread.sleep(3_000)
+                if (!watchdog.probeAcknowledged) {
+                    val stack = mainThread.stackTrace.joinToString("\n") { "    at $it" }
+                    android.util.Log.e("ANR_WATCHDOG", "主线程 3s 无响应，堆栈：\n$stack")
+                }
+                // 等下一轮前的余量，避免把正常忙盘认成卡死
+                Thread.sleep(1_000)
+            }
+        }, "anr-watchdog").apply { isDaemon = true }.start()
+    }
+
+    private val watchdog = object { var probeAcknowledged = false }
+
 
     /** 离线缓存下载服务的前台通知渠道 */
     private fun createDownloadChannel() {

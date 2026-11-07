@@ -90,11 +90,15 @@ class RoomClient(private val scope: CoroutineScope) {
     var rttMs: Long = 0
         private set
 
-    private var channel: WireChannel? = null
+    /** 当前通道；赋值发生在 Default 线程，读在 paho/主线程——@Volatile 保可见性，
+     *  回调一律用 `ch !== channel` 拒绝旧通道 */
+    @Volatile private var channel: WireChannel? = null
     private var endpoint: Endpoint = Endpoint(mqtt = true, uri = DEFAULT_MQTT_BROKER)
     private var nick = ""
     private var hostHint = false
     private var wantConnected = false
+    /** 连接代际：新 connect/close 使 in-flight 的通道构造作废（防慢路径交错赋值） */
+    @Volatile private var connectGen = 0L
     private var attempts = 0
     private var reconnectJob: Job? = null
     private var pingJob: Job? = null
@@ -111,16 +115,38 @@ class RoomClient(private val scope: CoroutineScope) {
 
     /** 创建/加入房间。服务器地址：留空=公共 MQTT 节点；mqtt(s)://=自定 MQTT；ws(s)://=自建中继；
      *  裸 host:port 按 MQTT 处理。同码重复调用会先干净断开旧连接。
-     *  [hostHint]=创建方：MQTT 模式下使用房间码派生的稳定 id 并恒自任房主（断线重连无缝夺回） */
+     *  [hostHint]=创建方：MQTT 模式下使用房间码派生的稳定 id 并恒自任房主（断线重连无缝夺回）。
+     *  真机 ANR 教训：paho 的客户端构造/disconnectForcibly 在弱网下会阻塞秒级——
+     *  通道的关旧/建新全程离主线程，本函数只做状态翻转后即刻返回 */
     fun connect(serverUrl: String, roomCode: String, nick: String, hostHint: Boolean = false) {
-        close("reconnect")
+        val gen = ++connectGen
         wantConnected = true
+        reconnectJob?.cancel()
+        reconnectJob = null
+        pingJob?.cancel()
+        pingJob = null
         this.nick = nick.trim().ifBlank { "路人" }
         this.hostHint = hostHint
         attempts = 0
         endpoint = resolveEndpoint(serverUrl)
         _state.value = ConnectionState(phase = Phase.CONNECTING, roomCode = roomCode)
-        openChannel()
+        val old = channel
+        channel = null
+        scope.launch(kotlinx.coroutines.Dispatchers.Default) {
+            old?.let { runCatching { it.close() } }
+            if (gen != connectGen) return@launch // 已被更新的连接/关闭请求作废
+            val ch: WireChannel = if (endpoint.mqtt) {
+                MqttChannel(endpoint.uri, roomCode, nick, hostHint, bridge)
+            } else {
+                WsChannel(wsClient, endpoint.uri, roomCode, bridge)
+            }
+            if (gen != connectGen) {
+                runCatching { ch.close() }
+                return@launch
+            }
+            channel = ch
+            runCatching { ch.open() }.onFailure { handleDown(ch, it, 0) }
+        }
     }
 
     fun sendState(msg: PartyWire.State) {
@@ -137,13 +163,16 @@ class RoomClient(private val scope: CoroutineScope) {
     }
 
     fun close(reason: String = "leave") {
+        connectGen++ // in-flight 通道构造作废
         wantConnected = false
         reconnectJob?.cancel()
         reconnectJob = null
         pingJob?.cancel()
         pingJob = null
-        channel?.close()
+        val old = channel
         channel = null
+        // disconnectForcibly 可能阻塞秒级，绝不碰主线程
+        old?.let { prev -> scope.launch(kotlinx.coroutines.Dispatchers.Default) { runCatching { prev.close() } } }
         _state.value = ConnectionState(phase = Phase.IDLE)
     }
 
@@ -158,25 +187,48 @@ class RoomClient(private val scope: CoroutineScope) {
         }
     }
 
-    private fun openChannel() {
-        val bridge = object : Bridge {
-            override fun onOpen(ch: WireChannel) = handleOpen(ch)
-            override fun onMessage(ch: WireChannel, text: String) = handleMessage(ch, text)
-            override fun onDown(ch: WireChannel, t: Throwable?, closeCode: Int) = handleDown(ch, t, closeCode)
+    private val bridge = object : Bridge {
+        override fun onOpen(ch: WireChannel) = handleOpen(ch)
+        override fun onMessage(ch: WireChannel, text: String) = handleMessage(ch, text)
+        override fun onDown(ch: WireChannel, t: Throwable?, closeCode: Int) = handleDown(ch, t, closeCode)
+    }
+
+    private fun scheduleReconnect(reason: String) {
+        if (!wantConnected) return
+        _events.tryEmit(Event.Disconnected(reason))
+        reconnectJob?.cancel()
+        reconnectJob = scope.launch {
+            attempts++
+            _state.value = _state.value.copy(
+                phase = Phase.RECONNECTING,
+                error = "连接中断，重连中（第 $attempts 次）…",
+            )
+            // 指数退避 1/2/4/8/16s，封顶 30s
+            delay(minOf(30_000L, 1_000L shl (attempts - 1).coerceAtMost(5)))
+            if (wantConnected) reopenChannel()
         }
-        val ch: WireChannel = if (endpoint.mqtt) {
-            MqttChannel(endpoint.uri, _state.value.roomCode, nick, hostHint, bridge)
-        } else {
-            WsChannel(wsClient, endpoint.uri, _state.value.roomCode, bridge)
-        }
+    }
+
+    /** 重连专用：复用已解析的 endpoint 重建通道（同样离主线程） */
+    private fun reopenChannel() {
+        val gen = ++connectGen
         val old = channel
-        channel = ch
-        // 旧通道异步关闭：MQTT 通道各持调度线程与定时器，不关会随重连次数泄漏；
-        // 不在通道自己的回调线程里关（paho disconnect 有锁），抛回协程完成
-        old?.let { prev ->
-            scope.launch(kotlinx.coroutines.Dispatchers.Default) { runCatching { prev.close() } }
+        channel = null
+        scope.launch(kotlinx.coroutines.Dispatchers.Default) {
+            old?.let { runCatching { it.close() } }
+            if (gen != connectGen) return@launch
+            val ch: WireChannel = if (endpoint.mqtt) {
+                MqttChannel(endpoint.uri, _state.value.roomCode, nick, hostHint, bridge)
+            } else {
+                WsChannel(wsClient, endpoint.uri, _state.value.roomCode, bridge)
+            }
+            if (gen != connectGen) {
+                runCatching { ch.close() }
+                return@launch
+            }
+            channel = ch
+            runCatching { ch.open() }.onFailure { handleDown(ch, it, 0) }
         }
-        runCatching { ch.open() }.onFailure { handleDown(ch, it, 0) }
     }
 
     private fun send(msg: PartyWire): Boolean {
@@ -192,22 +244,6 @@ class RoomClient(private val scope: CoroutineScope) {
                 delay(15_000)
                 send(PartyWire.Ping(at = System.currentTimeMillis()))
             }
-        }
-    }
-
-    private fun scheduleReconnect(reason: String) {
-        if (!wantConnected) return
-        _events.tryEmit(Event.Disconnected(reason))
-        reconnectJob?.cancel()
-        reconnectJob = scope.launch {
-            attempts++
-            _state.value = _state.value.copy(
-                phase = Phase.RECONNECTING,
-                error = "连接中断，重连中（第 $attempts 次）…",
-            )
-            // 指数退避 1/2/4/8/16s，封顶 30s
-            delay(minOf(30_000L, 1_000L shl (attempts - 1).coerceAtMost(5)))
-            if (wantConnected) openChannel()
         }
     }
 
