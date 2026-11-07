@@ -21,7 +21,9 @@ import java.util.concurrent.TimeUnit
 /** 传输通道：RoomClient 之上的协议状态机不感知底层是 WS 中继还是 MQTT 公共节点 */
 internal interface WireChannel {
     fun open()
-    fun send(text: String): Boolean
+
+    /** qos：MQTT 生效（关键消息 1，常规 0）；WS 通道忽略（自带可靠序） */
+    fun send(text: String, qos: Int = 0): Boolean
     fun close()
 }
 
@@ -91,6 +93,7 @@ class RoomClient(private val scope: CoroutineScope) {
     private var channel: WireChannel? = null
     private var endpoint: Endpoint = Endpoint(mqtt = true, uri = DEFAULT_MQTT_BROKER)
     private var nick = ""
+    private var hostHint = false
     private var wantConnected = false
     private var attempts = 0
     private var reconnectJob: Job? = null
@@ -107,11 +110,13 @@ class RoomClient(private val scope: CoroutineScope) {
         .build()
 
     /** 创建/加入房间。服务器地址：留空=公共 MQTT 节点；mqtt(s)://=自定 MQTT；ws(s)://=自建中继；
-     *  裸 host:port 按 MQTT 处理。同码重复调用会先干净断开旧连接 */
-    fun connect(serverUrl: String, roomCode: String, nick: String) {
+     *  裸 host:port 按 MQTT 处理。同码重复调用会先干净断开旧连接。
+     *  [hostHint]=创建方：MQTT 模式下使用房间码派生的稳定 id 并恒自任房主（断线重连无缝夺回） */
+    fun connect(serverUrl: String, roomCode: String, nick: String, hostHint: Boolean = false) {
         close("reconnect")
         wantConnected = true
         this.nick = nick.trim().ifBlank { "路人" }
+        this.hostHint = hostHint
         attempts = 0
         endpoint = resolveEndpoint(serverUrl)
         _state.value = ConnectionState(phase = Phase.CONNECTING, roomCode = roomCode)
@@ -160,11 +165,17 @@ class RoomClient(private val scope: CoroutineScope) {
             override fun onDown(ch: WireChannel, t: Throwable?, closeCode: Int) = handleDown(ch, t, closeCode)
         }
         val ch: WireChannel = if (endpoint.mqtt) {
-            MqttChannel(endpoint.uri, _state.value.roomCode, nick, bridge)
+            MqttChannel(endpoint.uri, _state.value.roomCode, nick, hostHint, bridge)
         } else {
             WsChannel(wsClient, endpoint.uri, _state.value.roomCode, bridge)
         }
+        val old = channel
         channel = ch
+        // 旧通道异步关闭：MQTT 通道各持调度线程与定时器，不关会随重连次数泄漏；
+        // 不在通道自己的回调线程里关（paho disconnect 有锁），抛回协程完成
+        old?.let { prev ->
+            scope.launch(kotlinx.coroutines.Dispatchers.Default) { runCatching { prev.close() } }
+        }
         runCatching { ch.open() }.onFailure { handleDown(ch, it, 0) }
     }
 
@@ -205,7 +216,10 @@ class RoomClient(private val scope: CoroutineScope) {
     private fun handleOpen(ch: WireChannel) {
         if (ch !== channel) return
         attempts = 0
-        send(PartyWire.Hello(room = _state.value.roomCode, nick = nick))
+        // hello 是成员表/房主解析的关键消息：MQTT 通道走 QoS1 防丢（WS 自带可靠，qos 参数被忽略）
+        runCatching {
+            ch.send(PartyWireCodec.encode(PartyWire.Hello(room = _state.value.roomCode, nick = nick)), qos = 1)
+        }
         startPing()
     }
 
@@ -312,7 +326,7 @@ internal class WsChannel(
         ws = client.newWebSocket(Request.Builder().url("$baseUrl/room/$roomCode").build(), listener)
     }
 
-    override fun send(text: String): Boolean = ws?.send(text) ?: false
+    override fun send(text: String, qos: Int): Boolean = ws?.send(text) ?: false
 
     override fun close() {
         ws?.close(1000, "leave")

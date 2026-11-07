@@ -1003,7 +1003,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             store.setWatchPartyNick(nick)
             if (serverUrl.isNotBlank()) store.setWatchPartyServer(serverUrl)
         }
-        partyClient.connect(serverUrl, WatchPartySync.generateRoomCode(), nick)
+        partyClient.connect(serverUrl, WatchPartySync.generateRoomCode(), nick, hostHint = true)
     }
 
     /** 加入房间：留空=公共 MQTT 节点（同码即同房间，与创建方一致）。
@@ -1018,7 +1018,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             store.setWatchPartyNick(nick)
             if (serverUrl.isNotBlank()) store.setWatchPartyServer(serverUrl)
         }
-        partyClient.connect(serverUrl, normalized, nick)
+        partyClient.connect(serverUrl, normalized, nick, hostHint = false)
     }
 
     fun leaveWatchParty(message: String? = null) {

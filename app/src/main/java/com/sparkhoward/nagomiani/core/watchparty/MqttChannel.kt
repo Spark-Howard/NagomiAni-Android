@@ -17,22 +17,35 @@ import java.util.concurrent.TimeUnit
  * 与 WS relay 的对外语义完全一致（见 RoomClient.Bridge）——上层 RoomClient 感知不到差别：
  * - 房间 = 单一共享主题 `nagomi-party/<CODE>`，QoS 0（KB 级状态每 5s 心跳自愈，聊天偶丢可接受）
  * - 成员/房主没有服务器分配：presence 心跳（[PresenceTable]）自组织，本机合成 welcome/members
- * - state/chat/sync 共享主题广播，过滤本机回显；ping 本机回环应答（RTT≈0，仅供保活统计）
- * 客户端 id 每次连接重新生成，旧 id 靠 TTL 自然过期，与断线重连/房主接棒语义天然兼容。
+ * - state/chat/sync 共享主题广播，过滤本机回显；ping 本机回环应答（RTT≈链路往返）
+ * - 成员/房主无服务器分配：presence 心跳（QoS1）自组织，房主裁决见 [MqttHostPolicy]
+ * - 房主（创建方）身份 = 房间码派生的稳定 id，断线重连无缝夺回；guest 随机 id
  */
 internal class MqttChannel(
     brokerUri: String,
     roomCode: String,
     private val nick: String,
+    private val hostHint: Boolean,
     private val bridge: Bridge,
 ) : MqttCallbackExtended, WireChannel {
 
-
-    private val selfId = "m" + java.lang.Long.toHexString(System.nanoTime()).takeLast(8) + (0..99).random()
+    /** 本机身份：房主（创建方）用「房间码派生的稳定 id」——断线重连后仍是同一 id，
+     *  自荐连续、成员表无缝衔接，房主位不会漂移到别的成员；guest 用随机 id。 */
+    private val selfId = if (hostHint) {
+        "h" + Integer.toHexString(roomCode.toByteArray().fold(0) { acc, b -> acc * 31 + b }).padStart(8, '0')
+    } else {
+        "m" + java.lang.Long.toHexString(System.nanoTime()).takeLast(8) + (0..99).random()
+    }
     private val topic = "nagomi-party/$roomCode"
     private val presence = PresenceTable()
     private val scheduler = Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "party-mqtt").apply { isDaemon = true } }
-    private val client = MqttAsyncClient(brokerUri, "nagomi-$selfId", MemoryPersistence())
+
+    // clientId 与身份解耦（加随机后缀）：同码双创建者不会互踢连接；身份只由消息里的 from 承载
+    private val client = MqttAsyncClient(
+        brokerUri,
+        "nagomi-" + java.lang.Long.toHexString(System.nanoTime()).takeLast(10),
+        MemoryPersistence(),
+    )
 
     @Volatile private var closed = false
     private var welcomed = false
@@ -71,7 +84,7 @@ internal class MqttChannel(
                             if (closed) return@scheduleAtFixedRate
                             runCatching {
                                 resolveAndBroadcast(forceWelcome = false)
-                                send(PartyWireCodec.encode(PartyWire.Presence(nick = nick, host = selfIsHost, from = selfId)))
+                                sendReliable(PartyWire.Presence(nick = nick, host = selfIsHost, from = selfId))
                             }
                         },
                         PRESENCE_PERIOD_MS, PRESENCE_PERIOD_MS, TimeUnit.MILLISECONDS,
@@ -87,14 +100,19 @@ internal class MqttChannel(
         })
     }
 
-    /** 发送：注入 from 后发布到房间主题（MQTT 会回发给发布者，onMessage 里统一过滤） */
-    override fun send(text: String): Boolean {
+    /** 发送：注入 from 后发布到房间主题（MQTT 会回发给发布者，onMessage 里统一过滤）。
+     *  hello/presence 用 QoS1（成员表与房主选举的关键消息，防丢包误判）；其余 QoS0 足够 */
+    override fun send(text: String, qos: Int): Boolean {
         if (closed) return false
         val injected = PartyWireCodec.decode(text)?.let { PartyWireCodec.encode(withFrom(it)) } ?: return false
         return runCatching {
-            client.publish(topic, MqttMessage(injected.toByteArray()).apply { qos = 0 })
+            client.publish(topic, MqttMessage(injected.toByteArray()).apply { this.qos = qos })
             true
         }.getOrDefault(false)
+    }
+
+    private fun sendReliable(msg: PartyWire) {
+        send(PartyWireCodec.encode(msg), qos = 1)
     }
 
     override fun close() {
@@ -129,7 +147,7 @@ internal class MqttChannel(
                 presence.record(from, msg.nick, hostClaim = false, System.currentTimeMillis())
                 // 欢迎握手：新成员要等下一个心跳（≤4s）才能看到房主自荐，会超出 welcome 解析窗口——
                 // 看到新面孔立即补发一次在场宣告（含本机自荐状态），让它在窗口内完成房主解析
-                runCatching { send(PartyWireCodec.encode(PartyWire.Presence(nick = nick, host = selfIsHost, from = selfId))) }
+                runCatching { sendReliable(PartyWire.Presence(nick = nick, host = selfIsHost, from = selfId)) }
                 resolveAndBroadcast(forceWelcome = false)
             }
 
@@ -148,14 +166,19 @@ internal class MqttChannel(
 
     // MARK: - 内部
 
-    /** 房主解析 + 成员变化广播。规则：TTL 内自荐者优先（取最小 id，防双创建者脑裂）；
-     *  无人自荐（房主掉线自荐过期）→ 最小 id 成员接任——所有成员算出同一结果，确定性收敛。
+    /** 房主解析 + 成员变化广播。规则（MqttHostPolicy）：
+     *  - 创建方（hostHint）：恒自任房主——断线重连后立即夺回，身份由稳定 id 保证连续
+     *  - 其余：TTL 内自荐者优先（取最小 id，防双自荐脑裂）；无人自荐（房主掉线自荐过期）→
+     *    「含自己在内的最小 id 成员」接任——含自己才能保证所有成员算出同一结果、恰好一人接任
      *  welcome 只发一次：解析窗口内等自荐，到点强制合成。 */
     private fun resolveAndBroadcast(forceWelcome: Boolean) {
         val now = System.currentTimeMillis()
-        val host = presence.resolveHost(now)
-            ?: presence.minMemberId(now)
-            ?: selfId
+        val host = MqttHostPolicy.resolveHost(
+            liveClaimMinId = presence.resolveHost(now),
+            minMemberId = presence.minMemberId(now),
+            selfId = selfId,
+            hostHint = hostHint,
+        )
         selfIsHost = host == selfId
         val membersPayload = PartyWireCodec.encode(
             PartyWire.Members(host = host, members = presence.members(now)),
