@@ -2,20 +2,15 @@ package com.sparkhoward.nagomiani.player
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Logout
 import androidx.compose.material3.AlertDialog
@@ -25,7 +20,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -112,7 +106,7 @@ fun WatchPartyEntryCard(modifier: Modifier = Modifier) {
         Column(Modifier.weight(1f)) {
             Text("一起看 · 和朋友同步看同一集", fontSize = 13.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
             Text(
-                "输房间码加入，或创建房间邀请朋友（同一 WiFi 自动发现）",
+                "输房间码加入，或创建房间邀请朋友（同一 WiFi、异地都零配置）",
                 fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -125,22 +119,15 @@ fun WatchPartyEntryCard(modifier: Modifier = Modifier) {
     }
 }
 
-/** 输码/附近房间/创建，三合一加入对话框（未进播放器的浅入口） */
+/** 输码/创建，二合一加入对话框（未进播放器的浅入口；留空服务器地址=公共节点，异地也零配置） */
 @Composable
 private fun WatchPartyJoinDialog(viewModel: PlayerViewModel, onDismiss: () -> Unit) {
     val party by viewModel.partyState.collectAsState()
-    val nearbyRooms by viewModel.nearbyRooms.collectAsState()
     val savedNick by viewModel.store.watchPartyNick.collectAsState(initial = "")
     val savedServer by viewModel.store.watchPartyServer.collectAsState(initial = RoomClient.DEFAULT_RELAY_URL)
     var nick by remember(savedNick) { mutableStateOf(savedNick) }
     var server by remember(savedServer) { mutableStateOf(savedServer) }
     var code by remember { mutableStateOf("") }
-
-    // 对话框打开期间扫描附近房间；关闭即停
-    LaunchedEffect(Unit) { viewModel.startNearbyDiscovery() }
-    DisposableEffect(Unit) {
-        onDispose { viewModel.stopNearbyDiscovery() }
-    }
 
     // 入房成功即收（弹层里能看到房间详情）
     LaunchedEffect(party.phase) {
@@ -168,34 +155,6 @@ private fun WatchPartyJoinDialog(viewModel: PlayerViewModel, onDismiss: () -> Un
                 )
                 Spacer(Modifier.size(8.dp))
 
-                if (nearbyRooms.isNotEmpty()) {
-                    Text("附近的房间（同一 WiFi 自动发现）", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    LazyColumn(Modifier.heightIn(max = 160.dp)) {
-                        items(nearbyRooms) { room ->
-                            Row(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .clickable { viewModel.joinDiscoveredRoom(room, nick.ifBlank { "路人" }) }
-                                    .padding(vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            ) {
-                                Text(
-                                    room.roomCode,
-                                    color = NagomiColors.accent,
-                                    fontSize = 15.sp,
-                                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
-                                )
-                                Text(
-                                    "${room.hostNick} 的房间",
-                                    fontSize = 13.sp,
-                                    modifier = Modifier.weight(1f),
-                                )
-                            }
-                        }
-                    }
-                }
-
                 OutlinedTextField(
                     value = code,
                     onValueChange = { code = it.uppercase() },
@@ -206,7 +165,7 @@ private fun WatchPartyJoinDialog(viewModel: PlayerViewModel, onDismiss: () -> Un
                 OutlinedTextField(
                     value = server,
                     onValueChange = { server = it },
-                    label = { Text("中继服务器（可选，异地看才需要）") },
+                    label = { Text("自定义服务器（可选，留空用公共节点）") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )

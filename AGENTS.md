@@ -39,8 +39,9 @@ app/src/main/java/com/sparkhoward/nagomiani/
 │   ├── notify/            EpisodeNotify（云端番库更新提醒）+ DailyAiringNotifier（今日放送提醒）
 │   ├── online/            WeeklyCalendar（放送周历 ±7 天窗口、日期升序、初始定位今天）、WeeklyAggregator、SourceSearchCache
 │   ├── store/AppStore.kt  DataStore 集中存储（设置/绑定/续播/云端番库/观看历史/测速/待同步队列）
-│   ├── watchparty/        一起看：WatchPartySync（落位/漂移纯逻辑）+ RoomClient（WS 客户端，不走应用内代理）+
-│   │                      LocalRoomServer（房主手机内嵌中继）+ PartyDiscovery（NSD 免填发现）；公网 relay 在 server/
+│   ├── watchparty/        一起看：WatchPartySync（落位/漂移纯逻辑）+ RoomClient（WS/MQTT 双通道，不走应用内
+│   │                      代理，留空地址=公共 MQTT 节点异地免配置）+ MqttChannel/PresenceTable（无服务器在场
+│   │                      广播与房主选举）+ LocalRoomServer（房主内嵌 WS 中继，备用）；自建 relay 在 server/
 │   ├── download/          离线缓存（CacheDataSource + 前台服务）
 │   └── update/            UpdateCenter（GitHub Releases 应用内更新）
 ├── player/                PlayerViewModel/Screen（ExoPlayer）、弹幕渲染、迷你小窗、截图分享卡

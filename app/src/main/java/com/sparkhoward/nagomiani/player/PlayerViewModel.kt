@@ -42,9 +42,6 @@ import com.sparkhoward.nagomiani.core.model.OnlineEpisode
 import com.sparkhoward.nagomiani.core.model.OnlinePlayback
 import com.sparkhoward.nagomiani.core.model.OnlineShow
 import com.sparkhoward.nagomiani.core.store.AppStore
-import com.sparkhoward.nagomiani.core.watchparty.DiscoveredRoom
-import com.sparkhoward.nagomiani.core.watchparty.LocalRoomServer
-import com.sparkhoward.nagomiani.core.watchparty.PartyDiscovery
 import com.sparkhoward.nagomiani.core.watchparty.PartyWire
 import com.sparkhoward.nagomiani.core.watchparty.RoomClient
 import com.sparkhoward.nagomiani.core.watchparty.WatchPartySync
@@ -997,36 +994,20 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun isPartyJoined(): Boolean = partyState.value.phase == RoomClient.Phase.JOINED
 
-    /** 创建房间：填了服务器地址→连自建中继；留空→房主本机开局（内嵌 WS 中继 + NSD 广播，
-     *  同一 WiFi 的朋友自动看到房间）。昵称记忆到 AppStore（默认已从 Bangumi 拉取） */
+    /** 创建房间：留空服务器地址=走公共 MQTT 节点（免部署，同一 WiFi 与异地都零配置）；
+     *  填 mqtt(s)://（自定 MQTT）或 ws(s)://（自建中继）则按其转发。
+     *  昵称记忆到 AppStore（默认已从 Bangumi 拉取） */
     fun createWatchParty(serverUrl: String, nick: String) {
         partyExpectedRole = RoomClient.Role.HOST
         viewModelScope.launch {
             store.setWatchPartyNick(nick)
             if (serverUrl.isNotBlank()) store.setWatchPartyServer(serverUrl)
         }
-        if (serverUrl.isBlank()) {
-            val code = WatchPartySync.generateRoomCode()
-            val server = LocalRoomServer(code, LocalRoomServer.pickFreePort())
-            runCatching {
-                server.start()
-                obtainDiscovery().register(code, server.address.port, nick)
-            }.onFailure {
-                runCatching { server.stop(0) }
-                showStatus("本机开局失败：${it.message ?: "未知错误"}，可填服务器地址重试")
-                partyExpectedRole = null
-                return
-            }
-            localServer = server
-            android.util.Log.i("WatchParty", "local room start code=$code port=${server.address.port}")
-            partyClient.connect("ws://127.0.0.1:${server.address.port}", code, nick)
-            return
-        }
         partyClient.connect(serverUrl, WatchPartySync.generateRoomCode(), nick)
     }
 
-    /** 加入房间：填了服务器地址→连自建中继；留空→先在附近发现列表里按码找房主（局域网免填），
-     *  找不到再提示。房间码 6 位自动大写规整 */
+    /** 加入房间：留空=公共 MQTT 节点（同码即同房间，与创建方一致）。
+     *  房间码 6 位自动大写规整 */
     fun joinWatchParty(serverUrl: String, code: String, nick: String) {
         val normalized = WatchPartySync.normalizeRoomCode(code) ?: run {
             showStatus("房间码格式不对：应为 6 位字母数字")
@@ -1037,30 +1018,11 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             store.setWatchPartyNick(nick)
             if (serverUrl.isNotBlank()) store.setWatchPartyServer(serverUrl)
         }
-        if (serverUrl.isBlank()) {
-            val found = nearbyRooms.value.firstOrNull { it.roomCode == normalized }
-            if (found == null) {
-                partyExpectedRole = null
-                showStatus("附近没有找到房间 $normalized：请确认房主已创建并连同一 WiFi，或填服务器地址")
-                return
-            }
-            partyClient.connect("ws://${found.host}:${found.port}", normalized, nick)
-            return
-        }
         partyClient.connect(serverUrl, normalized, nick)
-    }
-
-    /** 点击附近房间卡片加入（房间码取自 NSD 广播，无需输入） */
-    fun joinDiscoveredRoom(room: DiscoveredRoom, nick: String) {
-        partyExpectedRole = RoomClient.Role.GUEST
-        viewModelScope.launch { store.setWatchPartyNick(nick) }
-        partyClient.connect("ws://${room.host}:${room.port}", room.roomCode, nick)
     }
 
     fun leaveWatchParty(message: String? = null) {
         partyClient.close("leave")
-        stopLocalRoom()
-        stopNearbyDiscovery()
         hostState = null
         appliedHostEpoch = -1L
         partyExpectedRole = null
@@ -1069,44 +1031,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         partyHostEpisode.value = null
         _partyChat.value = emptyList()
         if (message != null) showStatus(message)
-    }
-
-    // MARK: - 一起看局域网模式（房主内嵌中继 + NSD 发现；实例全生命周期复用一个 PartyDiscovery）
-
-    private var localServer: LocalRoomServer? = null
-    private var discovery: PartyDiscovery? = null
-    private var discoveryJob: Job? = null
-
-    private fun obtainDiscovery(): PartyDiscovery =
-        discovery ?: PartyDiscovery(getApplication()).also { discovery = it }
-
-    /** 附近发现到的房间（弹层「附近房间」列表） */
-    private val _nearbyRooms = MutableStateFlow<List<DiscoveredRoom>>(emptyList())
-    val nearbyRooms: StateFlow<List<DiscoveredRoom>> = _nearbyRooms.asStateFlow()
-
-    /** 弹层打开期间扫描附近房间（UI 进入/离开时调用） */
-    fun startNearbyDiscovery() {
-        if (discoveryJob != null || isPartyJoined()) return
-        val d = obtainDiscovery()
-        discoveryJob = viewModelScope.launch {
-            d.rooms.collect { _nearbyRooms.value = it }
-        }
-        d.startDiscovering()
-    }
-
-    fun stopNearbyDiscovery() {
-        discoveryJob?.cancel()
-        discoveryJob = null
-        discovery?.stopDiscovering()
-        _nearbyRooms.value = emptyList()
-    }
-
-    private fun stopLocalRoom() {
-        localServer?.let { server ->
-            runCatching { server.stop(0) }
-            discovery?.unregister()
-        }
-        localServer = null
     }
 
     fun sendPartyChat(text: String) {
@@ -1442,9 +1366,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         periodicJob?.cancel()
         routeProbeJob?.cancel()
         partyClient.close("vm cleared")
-        stopLocalRoom()
-        stopNearbyDiscovery()
-        discovery?.shutdown()
         exoPlayer?.release()
         exoPlayer = null
         sharedPlayerView = null

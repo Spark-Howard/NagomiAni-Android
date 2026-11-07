@@ -102,6 +102,7 @@ dependencies {
     implementation(libs.okhttp.dnsoverhttps)
     implementation(libs.okhttp.logging)
     implementation(libs.java.websocket) // 一起看局域网模式：房主手机内嵌 WS 中继
+    implementation(libs.paho.mqtt) // 一起看异地模式：公共 MQTT 节点中继（免部署，纯 Java 客户端 ~250KB）
     implementation(libs.androidx.webkit)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.android)
