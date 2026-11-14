@@ -113,8 +113,9 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     private val _partyChat = MutableStateFlow<List<PartyChatEntry>>(emptyList())
     val partyChat: StateFlow<List<PartyChatEntry>> = _partyChat.asStateFlow()
 
-    /** 房主正在看的集号（guest 的全局入口卡提示「去播第 N 集」用；null=未知） */
-    val partyHostEpisode = MutableStateFlow<Int?>(null)
+    /** 房主正在看的内容（guest 全局入口卡提示 + 一键跳详情页用；null=未知/未开播） */
+    data class PartyHostWatching(val subjectId: Int, val episodeNumber: Int, val title: String?)
+    val partyHostWatching = MutableStateFlow<PartyHostWatching?>(null)
 
     init {
         val s = danmakuSettings
@@ -205,7 +206,15 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
                     is RoomClient.Event.HostState -> {
                         hostState = ev.state
                         hostStateAt = System.currentTimeMillis()
-                        partyHostEpisode.value = ev.state.episodeNumber.takeIf { it > 0 }
+                        partyHostWatching.value = if (ev.state.episodeNumber > 0) {
+                            PartyHostWatching(
+                                subjectId = ev.state.subjectId ?: 0,
+                                episodeNumber = ev.state.episodeNumber,
+                                title = ev.state.showTitle?.takeIf { it.isNotBlank() },
+                            )
+                        } else {
+                            null
+                        }
                         // 房主换了集：guest 各自手动跟上（MVP 不同步换集动作，只提示）
                         val mine = playback?.episodeNumber ?: -1
                         if (mine > 0 && ev.state.episodeNumber > 0 && ev.state.episodeNumber != mine) {
@@ -994,31 +1003,23 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun isPartyJoined(): Boolean = partyState.value.phase == RoomClient.Phase.JOINED
 
-    /** 创建房间：留空服务器地址=走公共 MQTT 节点（免部署，同一 WiFi 与异地都零配置）；
-     *  填 mqtt(s)://（自定 MQTT）或 ws(s)://（自建中继）则按其转发。
-     *  昵称记忆到 AppStore（默认已从 Bangumi 拉取） */
-    fun createWatchParty(serverUrl: String, nick: String) {
+    /** 创建房间：走公共 MQTT 节点（免部署，同一 WiFi 与异地都零配置），连接候选自动竞速切换。
+     *  昵称空缺时用已记忆的昵称（默认已从 Bangumi 拉取） */
+    fun createWatchParty(nick: String) {
         partyExpectedRole = RoomClient.Role.HOST
-        viewModelScope.launch {
-            store.setWatchPartyNick(nick)
-            if (serverUrl.isNotBlank()) store.setWatchPartyServer(serverUrl)
-        }
-        partyClient.connect(serverUrl, WatchPartySync.generateRoomCode(), nick, hostHint = true)
+        viewModelScope.launch { store.setWatchPartyNick(nick) }
+        partyClient.connect(serverUrl = "", WatchPartySync.generateRoomCode(), nick, hostHint = true)
     }
 
-    /** 加入房间：留空=公共 MQTT 节点（同码即同房间，与创建方一致）。
-     *  房间码 6 位自动大写规整 */
-    fun joinWatchParty(serverUrl: String, code: String, nick: String) {
+    /** 加入房间：同码即同房间（与创建方一致）。房间码 6 位自动大写规整 */
+    fun joinWatchParty(code: String, nick: String) {
         val normalized = WatchPartySync.normalizeRoomCode(code) ?: run {
             showStatus("房间码格式不对：应为 6 位字母数字")
             return
         }
         partyExpectedRole = RoomClient.Role.GUEST
-        viewModelScope.launch {
-            store.setWatchPartyNick(nick)
-            if (serverUrl.isNotBlank()) store.setWatchPartyServer(serverUrl)
-        }
-        partyClient.connect(serverUrl, normalized, nick, hostHint = false)
+        viewModelScope.launch { store.setWatchPartyNick(nick) }
+        partyClient.connect(serverUrl = "", normalized, nick, hostHint = false)
     }
 
     fun leaveWatchParty(message: String? = null) {
@@ -1028,7 +1029,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         partyExpectedRole = null
         partyWasHost = false
         partySpeedActive = false
-        partyHostEpisode.value = null
+        partyHostWatching.value = null
         _partyChat.value = emptyList()
         if (message != null) showStatus(message)
     }
@@ -1059,7 +1060,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     private fun onPartyWelcome(ev: RoomClient.Event.Welcome) {
         appliedHostEpoch = -1L
         hostState = null
-        partyHostEpisode.value = null
+        partyHostWatching.value = null
         partyWasHost = ev.selfId == ev.hostId
         if (ev.selfId == ev.hostId) {
             if (partyExpectedRole == RoomClient.Role.GUEST) {
@@ -1090,6 +1091,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             epoch = partyEpoch,
             episodeNumber = playback?.episodeNumber ?: 0,
             subjectId = playback?.boundSubjectID,
+            showTitle = playback?.showTitle,
         )
         partyClient.sendState(state)
     }

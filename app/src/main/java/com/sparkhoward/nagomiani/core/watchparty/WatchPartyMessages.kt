@@ -48,7 +48,8 @@ sealed interface PartyWire {
     data class Presence(val nick: String = "", val host: Boolean = false, val from: String? = null) : PartyWire
 
     /** 房主 → 全员：权威播放状态。wall=发送时刻（guest 推算落位）；
-     *  epoch 在 seek/换集等不连续点自增，guest 见到更大值立即硬对齐 */
+     *  epoch 在 seek/换集等不连续点自增，guest 见到更大值立即硬对齐。
+     *  showTitle/subjectId 供 guest 端「房主在看」提示与一键跳详情页 */
     @Serializable
     @SerialName("state")
     data class State(
@@ -58,6 +59,7 @@ sealed interface PartyWire {
         val epoch: Long = 0,
         val episodeNumber: Int = 0,
         val subjectId: Int? = null,
+        val showTitle: String? = null,
         val from: String? = null,
     ) : PartyWire
 

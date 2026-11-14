@@ -13,12 +13,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Logout
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -29,6 +26,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.ViewModelStoreOwner
@@ -38,40 +36,55 @@ import com.sparkhoward.nagomiani.ui.theme.NagomiColors
 import com.sparkhoward.nagomiani.ui.theme.NagomiPillAction
 
 /**
- * 一起看全局入口卡（搜索页/番库页顶部常驻）——朋友不用进播放器就能输房间码/点附近房间：
- * 未入房 = 一行入口「一起看 · 和朋友同步看同一集」+「创建 / 加入」；
- * 已入房 = 房间状态（guest 附「房主在看第 N 集」）+ 退出。
- * 加入/创建复用 PlayerViewModel（Activity 作用域，与播放器同实例，进播放器后无缝接管同步）。
+ * 一起看全局入口卡（搜索页/番库页顶部常驻）。创建与加入是两个独立入口：
+ * - 「创建房间」一键直达：即点即开（昵称默认 Bangumi 昵称），进入房主状态
+ * - 「加入房间」打开独立对话框：输 6 位房间码 + 连接状态/失败原因
+ * 已入房显示会话状态条：guest 附「房主在看《X》第 N 集」，点击直接跳详情页。
+ * 两个入口共用 Activity 级 PlayerViewModel（与播放器同实例，进播放器后无缝接管同步）。
  */
 @Composable
-fun WatchPartyEntryCard(modifier: Modifier = Modifier) {
+fun WatchPartyEntryCard(
+    modifier: Modifier = Modifier,
+    onOpenDetail: (Int) -> Unit = {},
+) {
     // 与 PlayerScreen 同一个 Activity 级实例（不能按导航目的地作用域，否则播放器拿不到会话）
     val activityOwner = LocalContext.current as ViewModelStoreOwner
     val viewModel: PlayerViewModel = viewModel(viewModelStoreOwner = activityOwner)
     val party by viewModel.partyState.collectAsState()
-    val hostEpisode by viewModel.partyHostEpisode.collectAsState()
+    val hostWatching by viewModel.partyHostWatching.collectAsState()
+    val savedNick by viewModel.store.watchPartyNick.collectAsState(initial = "")
     var showJoinDialog by remember { mutableStateOf(false) }
 
     if (party.phase == RoomClient.Phase.JOINED) {
+        val watching = hostWatching // 委托属性不能 smart cast，先落地局部值
+        // 会话状态条：房间码 + 身份 + 房主在看什么（guest 可点击跳详情页）
         Row(
             modifier
                 .fillMaxWidth()
                 .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(12.dp))
+                .clickable(enabled = party.role == RoomClient.Role.GUEST && watching != null && watching.subjectId > 0) {
+                    watching?.let { if (it.subjectId > 0) onOpenDetail(it.subjectId) }
+                }
                 .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(Icons.Filled.Groups, null, tint = NagomiColors.accent, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(8.dp))
-            Column {
+            Column(Modifier.weight(1f)) {
                 Text(
                     "一起看 · 房间 ${party.roomCode}" + (if (party.role == RoomClient.Role.HOST) "（你是房主）" else ""),
                     fontSize = 13.sp,
-                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                    fontWeight = FontWeight.SemiBold,
                 )
                 Text(
                     when {
-                        party.role == RoomClient.Role.GUEST && hostEpisode != null ->
-                            "房主在看第 $hostEpisode 集 · 播放同一集即自动同步"
+                        party.role == RoomClient.Role.GUEST && watching != null ->
+                            buildString {
+                                append("房主在看")
+                                watching.title?.let { append("《${it}》") }
+                                append("第 ${watching.episodeNumber} 集")
+                                if (watching.subjectId > 0) append(" · 点此前往")
+                            }
                         party.role == RoomClient.Role.HOST -> "开播后朋友自动跟随你的进度"
                         else -> "播放同一集即自动同步"
                     },
@@ -79,7 +92,6 @@ fun WatchPartyEntryCard(modifier: Modifier = Modifier) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            Spacer(Modifier.weight(1f))
             Icon(
                 Icons.Filled.Logout,
                 "退出房间",
@@ -93,123 +105,61 @@ fun WatchPartyEntryCard(modifier: Modifier = Modifier) {
         return
     }
 
-    Row(
+    // 未入房：创建 / 加入两个独立入口
+    Column(
         modifier
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(12.dp))
-            .clickable { showJoinDialog = true }
             .padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(Icons.Filled.Groups, null, tint = NagomiColors.accent, modifier = Modifier.size(18.dp))
-        Spacer(Modifier.width(8.dp))
-        Column(Modifier.weight(1f)) {
-            Text("一起看 · 和朋友同步看同一集", fontSize = 13.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Filled.Groups, null, tint = NagomiColors.accent, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Column(Modifier.weight(1f)) {
+                Text("一起看 · 和朋友同步看同一集", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                Text(
+                    "同一 WiFi、异地都能用，无需任何配置",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+
+        if (party.phase == RoomClient.Phase.CONNECTING) {
             Text(
-                "输房间码加入，或创建房间邀请朋友（同一 WiFi、异地都零配置）",
+                if (party.nodeCount > 1) "正在连接房间服务器（${party.nodeCount} 个节点并行竞速）…"
+                else "正在连接房间服务器…",
                 fontSize = 11.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = NagomiColors.accent,
+                modifier = Modifier.padding(top = 6.dp),
             )
         }
-        NagomiPillAction("进入", Icons.Filled.Groups) { showJoinDialog = true }
+        if (party.phase == RoomClient.Phase.FAILED || party.phase == RoomClient.Phase.RECONNECTING) {
+            Text(
+                party.error ?: "连接失败",
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(top = 6.dp),
+            )
+        }
+
+        Row(Modifier.padding(top = 8.dp), horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)) {
+            NagomiPillAction(
+                "创建房间",
+                Icons.Filled.Groups,
+                filled = true,
+                enabled = party.phase != RoomClient.Phase.CONNECTING,
+                modifier = Modifier.weight(1f),
+            ) { viewModel.createWatchParty(savedNick) }
+            NagomiPillAction(
+                "加入房间",
+                Icons.Filled.Groups,
+                modifier = Modifier.weight(1f),
+            ) { showJoinDialog = true }
+        }
     }
 
     if (showJoinDialog) {
         WatchPartyJoinDialog(viewModel = viewModel, onDismiss = { showJoinDialog = false })
     }
-}
-
-/** 输码/创建，二合一加入对话框（未进播放器的浅入口；留空服务器地址=公共节点，异地也零配置） */
-@Composable
-private fun WatchPartyJoinDialog(viewModel: PlayerViewModel, onDismiss: () -> Unit) {
-    val party by viewModel.partyState.collectAsState()
-    val savedNick by viewModel.store.watchPartyNick.collectAsState(initial = "")
-    val savedServer by viewModel.store.watchPartyServer.collectAsState(initial = RoomClient.DEFAULT_RELAY_URL)
-    var nick by remember(savedNick) { mutableStateOf(savedNick) }
-    var server by remember(savedServer) { mutableStateOf(savedServer) }
-    var code by remember { mutableStateOf("") }
-
-    // 入房成功即收（弹层里能看到房间详情）
-    LaunchedEffect(party.phase) {
-        if (party.phase == RoomClient.Phase.JOINED) onDismiss()
-    }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("一起看") },
-        text = {
-            Column {
-                if (party.phase == RoomClient.Phase.CONNECTING) {
-                    // 连接中要有可见进度（否则点创建像「没反应」）；自动切换节点时编号会跳变
-                    Text(
-                        if (party.nodeCount > 1) "正在连接房间服务器（节点 ${party.nodeIndex}/${party.nodeCount}）…"
-                        else "正在连接房间服务器…",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontSize = 12.sp,
-                    )
-                }
-                if (party.phase == RoomClient.Phase.FAILED || party.phase == RoomClient.Phase.RECONNECTING) {
-                    Text(
-                        party.error ?: "连接失败",
-                        color = MaterialTheme.colorScheme.error,
-                        fontSize = 12.sp,
-                    )
-                }
-                OutlinedTextField(
-                    value = nick,
-                    onValueChange = { nick = it },
-                    label = { Text("昵称（默认用 Bangumi 昵称）") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Spacer(Modifier.size(8.dp))
-
-                OutlinedTextField(
-                    value = code,
-                    onValueChange = { code = it.uppercase() },
-                    label = { Text("朋友的房间码（6 位）") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                OutlinedTextField(
-                    value = server,
-                    onValueChange = { server = it },
-                    label = { Text("自定义服务器（可选，留空用公共节点）") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(
-                enabled = party.phase != RoomClient.Phase.CONNECTING,
-                onClick = { viewModel.createWatchParty(server, nick.ifBlank { "路人" }) },
-            ) {
-                Text(
-                    if (party.phase == RoomClient.Phase.CONNECTING) "连接中…" else "创建房间",
-                    color = if (party.phase == RoomClient.Phase.CONNECTING) MaterialTheme.colorScheme.onSurfaceVariant
-                    else NagomiColors.accent,
-                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
-                )
-            }
-        },
-        dismissButton = {
-            Row {
-                TextButton(
-                    enabled = party.phase != RoomClient.Phase.CONNECTING,
-                    onClick = { viewModel.joinWatchParty(server, code, nick.ifBlank { "路人" }) },
-                ) {
-                    Text(
-                        if (party.phase == RoomClient.Phase.CONNECTING) "等待" else "加入",
-                        color = if (party.phase == RoomClient.Phase.CONNECTING) MaterialTheme.colorScheme.onSurfaceVariant
-                        else NagomiColors.accent,
-                        fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
-                    )
-                }
-                TextButton(onClick = onDismiss) {
-                    Text("关闭", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
-        },
-    )
 }

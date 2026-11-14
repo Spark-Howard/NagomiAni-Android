@@ -1,6 +1,7 @@
 package com.sparkhoward.nagomiani.player
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
@@ -34,6 +35,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -66,10 +68,7 @@ fun WatchPartySheet(
     val party by viewModel.partyState.collectAsState()
     val chat by viewModel.partyChat.collectAsState()
     val savedNick by viewModel.store.watchPartyNick.collectAsState(initial = "")
-    val savedServer by viewModel.store.watchPartyServer.collectAsState(initial = RoomClient.DEFAULT_RELAY_URL)
-    var nick by remember(savedNick) { mutableStateOf(savedNick) }
-    var server by remember(savedServer) { mutableStateOf(savedServer) }
-    var code by remember { mutableStateOf("") }
+    var showJoinDialog by remember { mutableStateOf(false) }
     var chatInput by remember { mutableStateOf("") }
     val clipboard = LocalClipboardManager.current
 
@@ -238,9 +237,10 @@ fun WatchPartySheet(
             }
 
             else -> {
+                // 未入房：创建 / 加入两个独立入口（与首页入口卡同构；加入走独立对话框）
                 if (party.phase == RoomClient.Phase.CONNECTING) {
                     Text(
-                        if (party.nodeCount > 1) "正在连接房间服务器（节点 ${party.nodeIndex}/${party.nodeCount}）…"
+                        if (party.nodeCount > 1) "正在连接房间服务器（${party.nodeCount} 个节点并行竞速）…"
                         else "正在连接房间服务器…",
                         color = NagomiColors.accent,
                         fontSize = 12.sp,
@@ -251,69 +251,58 @@ fun WatchPartySheet(
                     Text(err, color = ErrorColor, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
                 }
 
-                PartyField(
-                    value = nick,
-                    onValueChange = { nick = it },
-                    hint = "昵称（默认用 Bangumi 昵称）",
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 10.dp),
-                )
-
-                PartyField(
-                    value = server,
-                    onValueChange = { server = it },
-                    hint = "自定义服务器（可选：mqtt:// 或 ws://，留空用公共节点）",
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 8.dp),
-                )
-
-                Row(Modifier.padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                    // 创建房间：留空地址=本机开局（局域网）；填了=走自建中继（可异地）
-                    Text(
-                        "创建房间",
-                        color = Color.White,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier
-                            .background(NagomiColors.accent, RoundedCornerShape(999.dp))
-                            .clickable {
-                                viewModel.createWatchParty(server, nick.ifBlank { "路人" })
+                Row(
+                    Modifier.fillMaxWidth().padding(top = 10.dp),
+                    horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp),
+                ) {
+                    Box(
+                        Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(NagomiColors.accent)
+                            .clickable(enabled = party.phase != RoomClient.Phase.CONNECTING) {
+                                viewModel.createWatchParty(savedNick.ifBlank { "路人" })
                             }
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
-                    )
-                    Spacer(Modifier.width(10.dp))
-                    PartyField(
-                        value = code,
-                        onValueChange = { code = it.uppercase() },
-                        hint = "朋友给的房间码",
-                        modifier = Modifier.weight(1f),
-                        capitalization = KeyboardCapitalization.Characters,
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        "加入",
-                        color = NagomiColors.accent,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier
-                            .minimumTouchTarget()
-                            .clickable {
-                                viewModel.joinWatchParty(server, code, nick.ifBlank { "路人" })
-                            }
-                            .padding(horizontal = 6.dp, vertical = 4.dp),
-                    )
+                            .padding(vertical = 9.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            if (party.phase == RoomClient.Phase.CONNECTING) "连接中…" else "创建房间",
+                            color = Color.White,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                    Box(
+                        Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(999.dp))
+                            .border(1.dp, NagomiColors.accent, RoundedCornerShape(999.dp))
+                            .clickable { showJoinDialog = true }
+                            .padding(vertical = 9.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            "加入房间",
+                            color = NagomiColors.accent,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
                 }
 
                 Text(
-                    "输房间码即可同看，同一 WiFi、异地都行，无需任何配置（走免费公共节点）。有自建服务器时在地址栏填 mqtt:// 或 ws:// 地址。",
+                    "创建即得 6 位房间码，朋友「加入房间」输码同看；同一 WiFi、异地都能用，无需任何配置。",
                     color = LabelColor,
                     fontSize = 11.sp,
                     modifier = Modifier.padding(top = 8.dp, bottom = 2.dp),
                 )
             }
         }
+    }
+
+    if (showJoinDialog) {
+        WatchPartyJoinDialog(viewModel = viewModel, onDismiss = { showJoinDialog = false })
     }
 }
 
