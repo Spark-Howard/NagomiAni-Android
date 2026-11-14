@@ -100,10 +100,11 @@ fun LibraryScreen(
             }
         }
 
-        // 一起看全局入口：朋友不用进播放器就能输房间码/点附近房间
+        // 一起看全局入口：guest 可从卡片一键跳到房主在看的条目
         item {
             com.sparkhoward.nagomiani.player.WatchPartyEntryCard(
                 Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
+                onOpenDetail = onOpenDetail,
             )
         }
 

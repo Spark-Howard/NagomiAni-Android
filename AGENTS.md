@@ -39,9 +39,10 @@ app/src/main/java/com/sparkhoward/nagomiani/
 │   ├── notify/            EpisodeNotify（云端番库更新提醒）+ DailyAiringNotifier（今日放送提醒）
 │   ├── online/            WeeklyCalendar（放送周历 ±7 天窗口、日期升序、初始定位今天）、WeeklyAggregator、SourceSearchCache
 │   ├── store/AppStore.kt  DataStore 集中存储（设置/绑定/续播/云端番库/观看历史/测速/待同步队列）
-│   ├── watchparty/        一起看：WatchPartySync（落位/漂移纯逻辑）+ RoomClient（WS/MQTT 双通道，不走应用内
-│   │                      代理，留空地址=公共 MQTT 节点异地免配置）+ MqttChannel/PresenceTable（无服务器在场
-│   │                      广播与房主选举）+ LocalRoomServer（房主内嵌 WS 中继，备用）；自建 relay 在 server/
+│   ├── watchparty/        一起看：WatchPartySync（落位/漂移纯逻辑）+ RoomClient（MQTT 多节点 WSS 并行竞速，
+│   │                      不走应用内代理，零配置）+ MqttChannel（HiveMQ 内核；paho 在部分 Android 环境
+│   │                      connect 挂起故弃用）/PresenceTable/MqttHostPolicy（无服务器在场广播与房主裁决）+
+│   │                      LocalRoomServer（房主内嵌 WS 中继，备用）；自建 relay 在 server/
 │   ├── download/          离线缓存（CacheDataSource + 前台服务）
 │   └── update/            UpdateCenter（GitHub Releases 应用内更新）
 ├── player/                PlayerViewModel/Screen（ExoPlayer）、弹幕渲染、迷你小窗、截图分享卡
@@ -103,5 +104,5 @@ app/src/main/java/com/sparkhoward/nagomiani/
   弹幕/续播/历史；周历「导出日历」写入系统日历（JST）；设置中心（主题/通知/应用内
   代理/缓存清理/关于）；详情页角色/制作人员（legacy casts，中文名）；弹幕分层显隐 +
   密度抽样；dandanplay 凭据构建期混淆生成）。
-- 单元测试 139 项，全部纯 JVM（无 robolectric），新增可测逻辑请照 `HistoryStatsTest`/
+- 单元测试 156 项，全部纯 JVM（无 robolectric），新增可测逻辑请照 `HistoryStatsTest`/
   `SourceHealthTest` 风格补测试。

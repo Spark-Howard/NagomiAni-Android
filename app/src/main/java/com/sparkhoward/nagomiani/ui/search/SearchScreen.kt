@@ -141,9 +141,10 @@ fun SearchScreen(
         }
 
         if (state.keyword.isEmpty()) {
-            // 一起看全局入口：朋友不用进播放器就能输房间码/点附近房间
+            // 一起看全局入口：朋友不用进播放器就能输房间码；guest 可从卡片一键跳到房主在看的条目
             com.sparkhoward.nagomiani.player.WatchPartyEntryCard(
                 Modifier.padding(horizontal = 12.dp, vertical = 2.dp),
+                onOpenDetail = onOpenDetail,
             )
             // 下拉刷新：内容区下拉重拉放送表（与手动刷新同路，不重新定位翻页）
             PullToRefreshBox(

@@ -63,6 +63,14 @@ android {
                 else signingConfigs.getByName("debug")
         }
     }
+    // HiveMQ client 带 Netty：META-INF 与其他依赖冲突，排除之
+    packaging {
+        resources.excludes += setOf(
+            "META-INF/INDEX.LIST",
+            "META-INF/io.netty.versions.properties",
+            "META-INF/DEPENDENCIES",
+        )
+    }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -102,7 +110,7 @@ dependencies {
     implementation(libs.okhttp.dnsoverhttps)
     implementation(libs.okhttp.logging)
     implementation(libs.java.websocket) // 一起看局域网模式：房主手机内嵌 WS 中继
-    implementation(libs.paho.mqtt) // 一起看异地模式：公共 MQTT 节点中继（免部署，纯 Java 客户端 ~250KB）
+    implementation(libs.hivemq.mqtt) // 一起看异地模式：MQTT 客户端（公共节点中继；paho 1.2.5 在部分 Android 环境 connect 静默挂起故弃用）
     implementation(libs.androidx.webkit)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.android)
