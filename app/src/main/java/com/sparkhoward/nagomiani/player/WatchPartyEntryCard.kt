@@ -139,6 +139,15 @@ private fun WatchPartyJoinDialog(viewModel: PlayerViewModel, onDismiss: () -> Un
         title = { Text("一起看") },
         text = {
             Column {
+                if (party.phase == RoomClient.Phase.CONNECTING) {
+                    // 连接中要有可见进度（否则点创建像「没反应」）；自动切换节点时编号会跳变
+                    Text(
+                        if (party.nodeCount > 1) "正在连接房间服务器（节点 ${party.nodeIndex}/${party.nodeCount}）…"
+                        else "正在连接房间服务器…",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 12.sp,
+                    )
+                }
                 if (party.phase == RoomClient.Phase.FAILED || party.phase == RoomClient.Phase.RECONNECTING) {
                     Text(
                         party.error ?: "连接失败",
@@ -172,16 +181,30 @@ private fun WatchPartyJoinDialog(viewModel: PlayerViewModel, onDismiss: () -> Un
             }
         },
         confirmButton = {
-            TextButton(onClick = { viewModel.createWatchParty(server, nick.ifBlank { "路人" }) }) {
-                Text("创建房间", color = NagomiColors.accent, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+            TextButton(
+                enabled = party.phase != RoomClient.Phase.CONNECTING,
+                onClick = { viewModel.createWatchParty(server, nick.ifBlank { "路人" }) },
+            ) {
+                Text(
+                    if (party.phase == RoomClient.Phase.CONNECTING) "连接中…" else "创建房间",
+                    color = if (party.phase == RoomClient.Phase.CONNECTING) MaterialTheme.colorScheme.onSurfaceVariant
+                    else NagomiColors.accent,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                )
             }
         },
         dismissButton = {
             Row {
-                TextButton(onClick = {
-                    viewModel.joinWatchParty(server, code, nick.ifBlank { "路人" })
-                }) {
-                    Text("加入", color = NagomiColors.accent, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+                TextButton(
+                    enabled = party.phase != RoomClient.Phase.CONNECTING,
+                    onClick = { viewModel.joinWatchParty(server, code, nick.ifBlank { "路人" }) },
+                ) {
+                    Text(
+                        if (party.phase == RoomClient.Phase.CONNECTING) "等待" else "加入",
+                        color = if (party.phase == RoomClient.Phase.CONNECTING) MaterialTheme.colorScheme.onSurfaceVariant
+                        else NagomiColors.accent,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                    )
                 }
                 TextButton(onClick = onDismiss) {
                     Text("关闭", color = MaterialTheme.colorScheme.onSurfaceVariant)

@@ -74,6 +74,9 @@ class RoomClient(private val scope: CoroutineScope) {
         val hostId: String = "",
         val members: List<PartyMember> = emptyList(),
         val error: String? = null,
+        /** CONNECTING 期间正在尝试的候选节点（1 基；UI 显示「节点 i/n」） */
+        val nodeIndex: Int = 0,
+        val nodeCount: Int = 0,
     ) {
         val role: Role get() = if (selfId.isNotEmpty() && selfId == hostId) Role.HOST else Role.GUEST
         val nick: String get() = members.firstOrNull { it.id == selfId }?.nick ?: ""
@@ -93,7 +96,9 @@ class RoomClient(private val scope: CoroutineScope) {
     /** 当前通道；赋值发生在 Default 线程，读在 paho/主线程——@Volatile 保可见性，
      *  回调一律用 `ch !== channel` 拒绝旧通道 */
     @Volatile private var channel: WireChannel? = null
-    private var endpoint: Endpoint = Endpoint(mqtt = true, uri = DEFAULT_MQTT_BROKER)
+    /** 候选节点（留空地址=国内优先+全球兜底）与当前尝试下标；首连失败自动切下一个 */
+    private var endpoints: List<Endpoint> = listOf(Endpoint(mqtt = true, uri = DEFAULT_MQTT_ENDPOINTS.first()))
+    private var endpointIndex = 0
     private var nick = ""
     private var hostHint = false
     private var wantConnected = false
@@ -102,6 +107,7 @@ class RoomClient(private val scope: CoroutineScope) {
     private var attempts = 0
     private var reconnectJob: Job? = null
     private var pingJob: Job? = null
+    private var connectingGuard: Job? = null
 
     private data class Endpoint(val mqtt: Boolean, val uri: String)
 
@@ -113,8 +119,9 @@ class RoomClient(private val scope: CoroutineScope) {
         .proxy(java.net.Proxy.NO_PROXY)
         .build()
 
-    /** 创建/加入房间。服务器地址：留空=公共 MQTT 节点；mqtt(s)://=自定 MQTT；ws(s)://=自建中继；
-     *  裸 host:port 按 MQTT 处理。同码重复调用会先干净断开旧连接。
+    /** 创建/加入房间。服务器地址：留空=公共 MQTT 节点（国内优先、全球兜底，首连失败自动切换）；
+     *  mqtt(s)://=自定 MQTT；ws(s)://=自建中继；裸 host:port 按 MQTT 处理。
+     *  同码重复调用会先干净断开旧连接。
      *  [hostHint]=创建方：MQTT 模式下使用房间码派生的稳定 id 并恒自任房主（断线重连无缝夺回）。
      *  真机 ANR 教训：paho 的客户端构造/disconnectForcibly 在弱网下会阻塞秒级——
      *  通道的关旧/建新全程离主线程，本函数只做状态翻转后即刻返回 */
@@ -128,25 +135,20 @@ class RoomClient(private val scope: CoroutineScope) {
         this.nick = nick.trim().ifBlank { "路人" }
         this.hostHint = hostHint
         attempts = 0
-        endpoint = resolveEndpoint(serverUrl)
-        _state.value = ConnectionState(phase = Phase.CONNECTING, roomCode = roomCode)
-        val old = channel
-        channel = null
-        scope.launch(kotlinx.coroutines.Dispatchers.Default) {
-            old?.let { runCatching { it.close() } }
-            if (gen != connectGen) return@launch // 已被更新的连接/关闭请求作废
-            val ch: WireChannel = if (endpoint.mqtt) {
-                MqttChannel(endpoint.uri, roomCode, nick, hostHint, bridge)
-            } else {
-                WsChannel(wsClient, endpoint.uri, roomCode, bridge)
-            }
-            if (gen != connectGen) {
-                runCatching { ch.close() }
-                return@launch
-            }
-            channel = ch
-            runCatching { ch.open() }.onFailure { handleDown(ch, it, 0) }
-        }
+        endpoints = resolveEndpoints(serverUrl)
+        endpointIndex = 0
+        _state.value = ConnectionState(
+            phase = Phase.CONNECTING,
+            roomCode = roomCode,
+            nodeIndex = 1,
+            nodeCount = endpoints.size,
+        )
+        android.util.Log.i(
+            LOG_TAG,
+            "connect room=$roomCode host=$hostHint nodes=${endpoints.map { it.uri }}",
+        )
+        buildAndOpen(gen)
+        scheduleConnectingGuard(gen)
     }
 
     fun sendState(msg: PartyWire.State) {
@@ -165,6 +167,8 @@ class RoomClient(private val scope: CoroutineScope) {
     fun close(reason: String = "leave") {
         connectGen++ // in-flight 通道构造作废
         wantConnected = false
+        connectingGuard?.cancel()
+        connectingGuard = null
         reconnectJob?.cancel()
         reconnectJob = null
         pingJob?.cancel()
@@ -176,14 +180,16 @@ class RoomClient(private val scope: CoroutineScope) {
         _state.value = ConnectionState(phase = Phase.IDLE)
     }
 
-    private fun resolveEndpoint(raw: String): Endpoint {
+    /** 地址 → 候选节点列表（首连按序尝试，失败自动切下一个） */
+    private fun resolveEndpoints(raw: String): List<Endpoint> {
         val s = raw.trim().trimEnd('/')
+        val single = { mqtt: Boolean, uri: String -> listOf(Endpoint(mqtt, uri)) }
         return when {
-            s.isEmpty() -> Endpoint(mqtt = true, uri = DEFAULT_MQTT_BROKER)
-            s.startsWith("mqtt://") -> Endpoint(mqtt = true, uri = "tcp://" + s.removePrefix("mqtt://"))
-            s.startsWith("mqtts://") -> Endpoint(mqtt = true, uri = "ssl://" + s.removePrefix("mqtts://"))
-            s.startsWith("ws://") || s.startsWith("wss://") -> Endpoint(mqtt = false, uri = s)
-            else -> Endpoint(mqtt = true, uri = "tcp://$s")
+            s.isEmpty() -> DEFAULT_MQTT_ENDPOINTS.map { Endpoint(mqtt = true, uri = it) }
+            s.startsWith("mqtt://") -> single(true, "tcp://" + s.removePrefix("mqtt://"))
+            s.startsWith("mqtts://") -> single(true, "ssl://" + s.removePrefix("mqtts://"))
+            s.startsWith("ws://") || s.startsWith("wss://") -> single(false, s)
+            else -> single(true, "tcp://$s")
         }
     }
 
@@ -205,22 +211,29 @@ class RoomClient(private val scope: CoroutineScope) {
             )
             // 指数退避 1/2/4/8/16s，封顶 30s
             delay(minOf(30_000L, 1_000L shl (attempts - 1).coerceAtMost(5)))
-            if (wantConnected) reopenChannel()
+            if (wantConnected) {
+                val gen = ++connectGen
+                buildAndOpen(gen)
+            }
         }
     }
 
-    /** 重连专用：复用已解析的 endpoint 重建通道（同样离主线程） */
-    private fun reopenChannel() {
-        val gen = ++connectGen
+    /** 构建并打开当前候选节点的通道（离主线程；关旧 → 代际校验 → 赋值 → open） */
+    private fun buildAndOpen(gen: Long) {
         val old = channel
         channel = null
         scope.launch(kotlinx.coroutines.Dispatchers.Default) {
             old?.let { runCatching { it.close() } }
             if (gen != connectGen) return@launch
-            val ch: WireChannel = if (endpoint.mqtt) {
-                MqttChannel(endpoint.uri, _state.value.roomCode, nick, hostHint, bridge)
+            val ep = endpoints[endpointIndex.coerceIn(endpoints.indices)]
+            android.util.Log.i(
+                LOG_TAG,
+                "attempt ${endpointIndex + 1}/${endpoints.size} endpoint=${ep.uri} phase=${_state.value.phase}",
+            )
+            val ch: WireChannel = if (ep.mqtt) {
+                MqttChannel(ep.uri, _state.value.roomCode, nick, hostHint, bridge)
             } else {
-                WsChannel(wsClient, endpoint.uri, _state.value.roomCode, bridge)
+                WsChannel(wsClient, ep.uri, _state.value.roomCode, bridge)
             }
             if (gen != connectGen) {
                 runCatching { ch.close() }
@@ -228,6 +241,19 @@ class RoomClient(private val scope: CoroutineScope) {
             }
             channel = ch
             runCatching { ch.open() }.onFailure { handleDown(ch, it, 0) }
+        }
+    }
+
+    /** CONNECTING 看门狗：paho 的 connectionTimeout 不覆盖 DNS 挂起等场景，
+     *  超时仍 CONNECTING 就走 handleDown（切下一个候选或明确 FAILED） */
+    private fun scheduleConnectingGuard(gen: Long) {
+        connectingGuard?.cancel()
+        connectingGuard = scope.launch {
+            delay(CONNECTING_TIMEOUT_MS)
+            if (gen == connectGen && wantConnected && _state.value.phase == Phase.CONNECTING) {
+                val ch = channel
+                if (ch != null) handleDown(ch, java.net.SocketTimeoutException("连接超时（15s）"), 0)
+            }
         }
     }
 
@@ -263,6 +289,11 @@ class RoomClient(private val scope: CoroutineScope) {
         if (ch !== channel) return
         when (val msg = PartyWireCodec.decode(text)) {
             is PartyWire.Welcome -> {
+                connectingGuard?.cancel()
+                android.util.Log.i(
+                    LOG_TAG,
+                    "joined room=${_state.value.roomCode} endpoint=${endpoints[endpointIndex.coerceIn(endpoints.indices)].uri} you=${msg.you} host=${msg.host}",
+                )
                 _state.value = _state.value.copy(
                     phase = Phase.JOINED,
                     selfId = msg.you,
@@ -294,6 +325,8 @@ class RoomClient(private val scope: CoroutineScope) {
 
     private fun handleDown(ch: WireChannel, t: Throwable?, closeCode: Int) {
         if (ch !== channel || !wantConnected) return
+        connectingGuard?.cancel()
+        android.util.Log.w(LOG_TAG, "down phase=${_state.value.phase} code=$closeCode err=${t?.message}")
         // 4002=房间满员：明确失败，不重连（重连还是满）
         if (closeCode == 4002) {
             _state.value = _state.value.copy(phase = Phase.FAILED, error = "房间已满（16 人上限）")
@@ -301,10 +334,18 @@ class RoomClient(private val scope: CoroutineScope) {
             return
         }
         if (_state.value.phase == Phase.CONNECTING) {
-            // 首连即失败（地址错/服务没起/网络不通）：不无限重试，交还用户处理
+            // 首连失败：还有候选节点就自动切下一个（仍保持 CONNECTING），切完才 FAILED 交还用户
+            if (endpointIndex + 1 < endpoints.size) {
+                endpointIndex++
+                _state.value = _state.value.copy(nodeIndex = endpointIndex + 1)
+                buildAndOpen(connectGen)
+                scheduleConnectingGuard(connectGen)
+                return
+            }
+            connectingGuard?.cancel()
             _state.value = _state.value.copy(
                 phase = Phase.FAILED,
-                error = "连接失败：${t?.message ?: "未知错误"}",
+                error = "连接房间服务器失败：${t?.message ?: "未知错误"}。请检查网络，或在地址栏填写自定义服务器（mqtt:// 或 ws://）",
             )
             wantConnected = false
             return
@@ -313,12 +354,21 @@ class RoomClient(private val scope: CoroutineScope) {
     }
 
     companion object {
+        private const val LOG_TAG = "WatchParty"
+
         /** 自建 WS 中继默认地址：部署后填「wss://你的域名」（空=App 内每次手动填写） */
         const val DEFAULT_RELAY_URL = ""
 
         /** 公共 MQTT 节点（EMQX 官方免费节点，免注册；仅转发 KB 级房间消息）。
+         *  国内节点优先，全球节点兜底——首连失败自动切换。
          *  想自持化：任选 MQTT broker（EMQX/NanoMQ…）部署后填 mqtt://你的地址 */
-        const val DEFAULT_MQTT_BROKER = "tcp://broker.emqx.io:1883"
+        val DEFAULT_MQTT_ENDPOINTS = listOf(
+            "tcp://broker-cn.emqx.io:1883",
+            "tcp://broker.emqx.io:1883",
+        )
+
+        /** 单次连接尝试的看门狗时限：paho connectionTimeout(10s) + DNS 余量 */
+        const val CONNECTING_TIMEOUT_MS = 15_000L
     }
 }
 

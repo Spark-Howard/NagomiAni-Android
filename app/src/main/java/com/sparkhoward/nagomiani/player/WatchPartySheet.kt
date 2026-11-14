@@ -238,6 +238,15 @@ fun WatchPartySheet(
             }
 
             else -> {
+                if (party.phase == RoomClient.Phase.CONNECTING) {
+                    Text(
+                        if (party.nodeCount > 1) "正在连接房间服务器（节点 ${party.nodeIndex}/${party.nodeCount}）…"
+                        else "正在连接房间服务器…",
+                        color = NagomiColors.accent,
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                }
                 party.error?.let { err ->
                     Text(err, color = ErrorColor, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
                 }
