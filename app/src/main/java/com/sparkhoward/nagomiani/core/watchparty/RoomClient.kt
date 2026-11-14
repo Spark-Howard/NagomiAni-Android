@@ -345,7 +345,8 @@ class RoomClient(private val scope: CoroutineScope) {
             connectingGuard?.cancel()
             _state.value = _state.value.copy(
                 phase = Phase.FAILED,
-                error = "连接房间服务器失败：${t?.message ?: "未知错误"}。请检查网络，或在地址栏填写自定义服务器（mqtt:// 或 ws://）",
+                error = "连接房间服务器失败（${endpoints.size} 个节点均不可达）：${t?.message ?: "未知错误"}。" +
+                    "请检查网络/防火墙（公共节点走 8084/1883 端口），或在地址栏填写自定义服务器（mqtt:// 或 ws://）",
             )
             wantConnected = false
             return
@@ -359,16 +360,19 @@ class RoomClient(private val scope: CoroutineScope) {
         /** 自建 WS 中继默认地址：部署后填「wss://你的域名」（空=App 内每次手动填写） */
         const val DEFAULT_RELAY_URL = ""
 
-        /** 公共 MQTT 节点（EMQX 官方免费节点，免注册；仅转发 KB 级房间消息）。
-         *  国内节点优先，全球节点兜底——首连失败自动切换。
+        /** 公共 MQTT 节点候选（EMQX 官方免费节点，免注册；仅转发 KB 级房间消息）。
+         *  WSS（TLS WebSocket）优先——1883 等非标准端口的出站 TCP 常被运营商/防火墙拦截，
+         *  WSS 流量形如普通 HTTPS，可达性远更好；TCP 作为兜底。首连失败按序自动切换。
          *  想自持化：任选 MQTT broker（EMQX/NanoMQ…）部署后填 mqtt://你的地址 */
         val DEFAULT_MQTT_ENDPOINTS = listOf(
+            "wss://broker-cn.emqx.io:8084/mqtt",
+            "wss://broker.emqx.io:8084/mqtt",
             "tcp://broker-cn.emqx.io:1883",
             "tcp://broker.emqx.io:1883",
         )
 
-        /** 单次连接尝试的看门狗时限：paho connectionTimeout(10s) + DNS 余量 */
-        const val CONNECTING_TIMEOUT_MS = 15_000L
+        /** 单次连接尝试的看门狗时限：paho connectionTimeout(5s) + DNS 余量 */
+        const val CONNECTING_TIMEOUT_MS = 8_000L
     }
 }
 

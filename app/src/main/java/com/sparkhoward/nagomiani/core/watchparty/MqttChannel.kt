@@ -61,7 +61,7 @@ internal class MqttChannel(
     override fun open() {
         val options = MqttConnectOptions().apply {
             isCleanSession = true
-            connectionTimeout = 10
+            connectionTimeout = 5 // 快速失败：候选节点多，单节点拖太久整体失败要等太久
             keepAliveInterval = 30
             isAutomaticReconnect = false // 重连由 RoomClient 统一退避调度
             maxInflight = 32
