@@ -96,7 +96,7 @@ class RoomClient(private val scope: CoroutineScope) {
     /** 当前通道；赋值发生在 Default 线程，读在 paho/主线程——@Volatile 保可见性，
      *  回调一律用 `ch !== channel` 拒绝旧通道 */
     @Volatile private var channel: WireChannel? = null
-    /** 候选节点（留空地址=国内优先+全球兜底）与胜出者下标 */
+    /** 候选节点（按房间码确定性排序：同房间所有设备必然同序同节点，绝不分裂到不同 broker） */
     private var endpoints: List<Endpoint> = listOf(Endpoint(mqtt = true, uri = DEFAULT_MQTT_ENDPOINTS.first()))
     private var endpointIndex = 0
     private var nick = ""
@@ -108,9 +108,6 @@ class RoomClient(private val scope: CoroutineScope) {
     private var reconnectJob: Job? = null
     private var pingJob: Job? = null
     private var connectingGuard: Job? = null
-    /** 竞速期：并行打开的候选通道（首个 onOpen 者胜出并接管为 channel） */
-    private data class RaceEntry(val index: Int, val ch: WireChannel)
-    @Volatile private var race: List<RaceEntry>? = null
     /** 最近一次收到对端消息的时刻（JOINED 静默看门狗用；0=尚未收到） */
     @Volatile private var lastIncomingAt = 0L
 
@@ -124,8 +121,8 @@ class RoomClient(private val scope: CoroutineScope) {
         .proxy(java.net.Proxy.NO_PROXY)
         .build()
 
-    /** 创建/加入房间。服务器地址：留空=公共 MQTT 节点（国内优先、全球兜底，首连失败自动切换）；
-     *  mqtt(s)://=自定 MQTT；ws(s)://=自建中继；裸 host:port 按 MQTT 处理。
+    /** 创建/加入房间。服务器地址：留空=公共 MQTT 节点（按房间码确定性选节点：同房间必同节点，
+     *  失联时按同序轮换兜底）；mqtt(s)://=自定 MQTT；ws(s)://=自建中继；裸 host:port 按 MQTT 处理。
      *  同码重复调用会先干净断开旧连接。
      *  [hostHint]=创建方：MQTT 模式下使用房间码派生的稳定 id 并恒自任房主（断线重连无缝夺回）。
      *  真机 ANR 教训：paho 的客户端构造/disconnectForcibly 在弱网下会阻塞秒级——
@@ -140,19 +137,19 @@ class RoomClient(private val scope: CoroutineScope) {
         this.nick = nick.trim().ifBlank { "路人" }
         this.hostHint = hostHint
         attempts = 0
-        endpoints = resolveEndpoints(serverUrl)
+        endpoints = resolveEndpoints(serverUrl, roomCode)
         endpointIndex = 0
         _state.value = ConnectionState(
             phase = Phase.CONNECTING,
             roomCode = roomCode,
-            nodeIndex = endpoints.size,
+            nodeIndex = 1,
             nodeCount = endpoints.size,
         )
         android.util.Log.i(
             LOG_TAG,
             "connect room=$roomCode host=$hostHint nodes=${endpoints.map { it.uri }}",
         )
-        buildAndRace(gen)
+        openSingle(gen)
         scheduleConnectingGuard(gen)
     }
 
@@ -180,26 +177,35 @@ class RoomClient(private val scope: CoroutineScope) {
         reconnectJob = null
         pingJob?.cancel()
         pingJob = null
-        val r = race
-        race = null
-        val olds = (r?.map { it.ch } ?: emptyList()).plus(listOfNotNull(channel))
+        val old = channel
         channel = null
         // disconnectForcibly 可能阻塞秒级，绝不碰主线程
-        olds.forEach { prev -> scope.launch(kotlinx.coroutines.Dispatchers.Default) { runCatching { prev.close() } } }
+        old?.let { prev -> scope.launch(kotlinx.coroutines.Dispatchers.Default) { runCatching { prev.close() } } }
         _state.value = ConnectionState(phase = Phase.IDLE)
     }
 
-    /** 地址 → 候选节点列表（首连按序尝试，失败自动切下一个） */
-    private fun resolveEndpoints(raw: String): List<Endpoint> {
+    /** 地址 → 候选节点列表。留空 = 公共节点按「房间码哈希」确定性轮转排序：
+     *  同一房间的所有设备算出同一顺序，必然连上同一节点（跨设备竞速会各自选最快节点，
+     *  房间分裂成两个互不可见——这是「好友看不到在播什么」的根因）。失败时按同序轮换兜底。 */
+    private fun resolveEndpoints(raw: String, roomCode: String): List<Endpoint> {
         val s = raw.trim().trimEnd('/')
         val single = { mqtt: Boolean, uri: String -> listOf(Endpoint(mqtt, uri)) }
-        return when {
+        val base: List<Endpoint> = when {
             s.isEmpty() -> DEFAULT_MQTT_ENDPOINTS.map { Endpoint(mqtt = true, uri = it) }
             s.startsWith("mqtt://") -> single(true, "tcp://" + s.removePrefix("mqtt://"))
             s.startsWith("mqtts://") -> single(true, "ssl://" + s.removePrefix("mqtts://"))
             s.startsWith("ws://") || s.startsWith("wss://") -> single(false, s)
             else -> single(true, "tcp://$s")
         }
+        if (s.isNotEmpty()) return base
+        // 留空（公共节点）：确定性轮转只在已验证可靠的 TCP 节点间进行（负载分摊），
+        // 其余（WSS）固定殿后兜底——轮转主节点若落在已知有问题/较慢的传输上，
+        // 所有同房间设备都要一起吃 8s 守卫超时
+        val primary = base.take(TCP_PRIMARY_COUNT)
+        val trailing = base.drop(TCP_PRIMARY_COUNT)
+        return PartyEndpoints.ordered(primary.map { it.uri }, roomCode).map { uri ->
+            Endpoint(mqtt = true, uri = uri)
+        }.plus(trailing)
     }
 
     private val bridge = object : Bridge {
@@ -222,20 +228,23 @@ class RoomClient(private val scope: CoroutineScope) {
             delay(minOf(30_000L, 1_000L shl (attempts - 1).coerceAtMost(5)))
             if (wantConnected) {
                 val gen = ++connectGen
-                buildSingle(gen)
+                openSingle(gen)
             }
         }
     }
 
-    /** 重连专用：沿用胜出节点的单通道重建（离主线程） */
-    private fun buildSingle(gen: Long) {
+    /** 按当前候选节点打开单通道（首连/重连共用；离主线程：关旧 → 代际校验 → 赋值 → open） */
+    private fun openSingle(gen: Long) {
         val old = channel
         channel = null
         scope.launch(kotlinx.coroutines.Dispatchers.Default) {
             old?.let { runCatching { it.close() } }
             if (gen != connectGen) return@launch
             val ep = endpoints[endpointIndex.coerceIn(endpoints.indices)]
-            android.util.Log.i(LOG_TAG, "reconnect endpoint=${ep.uri} attempt=$attempts")
+            android.util.Log.i(
+                LOG_TAG,
+                "open ${endpointIndex + 1}/${endpoints.size} endpoint=${ep.uri} attempt=$attempts",
+            )
             val ch: WireChannel = if (ep.mqtt) {
                 MqttChannel(ep.uri, _state.value.roomCode, nick, hostHint, bridge)
             } else {
@@ -250,66 +259,38 @@ class RoomClient(private val scope: CoroutineScope) {
         }
     }
 
-    /** 首连竞速：并行打开全部候选节点（彼此错开小延时，略偏向排序靠前的节点），
-     *  最先完成握手者胜出接管，其余立即关闭。总时长 = 最快节点的握手耗时，而非逐个累加 */
-    private fun buildAndRace(gen: Long) {
-        val old = channel
-        val oldRace = race
-        channel = null
-        race = null
-        scope.launch(kotlinx.coroutines.Dispatchers.Default) {
-            (oldRace?.map { it.ch } ?: emptyList()).plus(listOfNotNull(old)).forEach {
-                runCatching { it.close() }
-            }
-            if (gen != connectGen) return@launch
-            val entries = endpoints.mapIndexed { index, ep ->
-                val ch: WireChannel = if (ep.mqtt) {
-                    MqttChannel(ep.uri, _state.value.roomCode, nick, hostHint, bridge)
-                } else {
-                    WsChannel(wsClient, ep.uri, _state.value.roomCode, bridge)
-                }
-                RaceEntry(index, ch)
-            }
-            if (gen != connectGen) {
-                entries.forEach { runCatching { it.ch.close() } }
-                return@launch
-            }
-            race = entries
-            entries.forEachIndexed { index, entry ->
-                scope.launch(kotlinx.coroutines.Dispatchers.Default) {
-                    if (index > 0) delay(index * RACE_STAGGER_MS)
-                    if (gen != connectGen || race?.any { it.ch === entry.ch } != true) {
-                        runCatching { entry.ch.close() }
-                        return@launch
-                    }
-                    android.util.Log.i(LOG_TAG, "race open ${index + 1}/${endpoints.size} ${endpoints[index].uri}")
-                    runCatching { entry.ch.open() }.onFailure { handleDown(entry.ch, it, 0) }
-                }
-            }
-        }
-    }
-
-    /** CONNECTING 看门狗：paho 的 connectionTimeout 不覆盖 DNS 挂起等场景，
-     *  超时仍 CONNECTING（竞速无胜者/胜者未入房）就明确 FAILED */
+    /** CONNECTING 看门狗：单节点预算 ${CONNECTING_TIMEOUT_MS / 1000}s（覆盖 HiveMQ 默认 30s 连接超时
+     *  与 DNS 挂起）——超时即关当前通道、切下一个候选；全部候选超时才明确 FAILED */
     private fun scheduleConnectingGuard(gen: Long) {
         connectingGuard?.cancel()
         connectingGuard = scope.launch {
             delay(CONNECTING_TIMEOUT_MS)
             if (gen == connectGen && wantConnected && _state.value.phase == Phase.CONNECTING) {
-                failConnecting("连接超时（${CONNECTING_TIMEOUT_MS / 1000}s）")
+                val ch = channel
+                android.util.Log.w(LOG_TAG, "connecting guard fired, advance to next endpoint")
+                if (ch != null) {
+                    channel = null
+                    scope.launch(kotlinx.coroutines.Dispatchers.Default) { runCatching { ch.close() } }
+                }
+                if (endpointIndex + 1 < endpoints.size) {
+                    endpointIndex++
+                    _state.value = _state.value.copy(nodeIndex = endpointIndex + 1)
+                    openSingle(connectGen)
+                    scheduleConnectingGuard(connectGen)
+                } else {
+                    failConnecting("连接超时（单节点 ${CONNECTING_TIMEOUT_MS / 1000}s）")
+                }
             }
         }
     }
 
-    /** CONNECTING 阶段的统一失败出口：清掉竞速/当前通道，给出带候选数的明确错误 */
+    /** CONNECTING 阶段的统一失败出口：清掉当前通道，给出带候选数的明确错误 */
     private fun failConnecting(reason: String) {
         if (!wantConnected || _state.value.phase != Phase.CONNECTING) return
         connectingGuard?.cancel()
-        val r = race
-        race = null
         val old = channel
         channel = null
-        (r?.map { it.ch } ?: emptyList()).plus(listOfNotNull(old)).forEach {
+        old?.let {
             scope.launch(kotlinx.coroutines.Dispatchers.Default) { runCatching { it.close() } }
         }
         _state.value = _state.value.copy(
@@ -350,20 +331,7 @@ class RoomClient(private val scope: CoroutineScope) {
     // MARK: - 通道回调（ch !== channel 的是旧通道迟到回调，一律忽略防幽灵）
 
     private fun handleOpen(ch: WireChannel) {
-        val r = race
-        if (r != null) {
-            // 竞速期：首个完成握手的通道胜出，其余立即关闭
-            val entry = r.firstOrNull { it.ch === ch } ?: return
-            race = null
-            channel = ch
-            endpointIndex = entry.index
-            r.forEach {
-                if (it.ch !== ch) {
-                    scope.launch(kotlinx.coroutines.Dispatchers.Default) { runCatching { it.ch.close() } }
-                }
-            }
-            android.util.Log.i(LOG_TAG, "race winner endpoint=${endpoints[entry.index].uri}")
-        } else if (ch !== channel) return
+        if (ch !== channel) return
         attempts = 0
         lastIncomingAt = System.currentTimeMillis()
         // hello 是成员表/房主解析的关键消息：MQTT 通道走 QoS1 防丢（WS 自带可靠，qos 参数被忽略）
@@ -413,16 +381,6 @@ class RoomClient(private val scope: CoroutineScope) {
     }
 
     private fun handleDown(ch: WireChannel, t: Throwable?, closeCode: Int) {
-        val r = race
-        if (r != null) {
-            // 竞速期：只统计失败者，还有人活着就继续等（总时限由 connectingGuard 把守）
-            val entry = r.firstOrNull { it.ch === ch } ?: return
-            val remaining = r.filter { it.ch !== ch }
-            race = remaining
-            android.util.Log.w(LOG_TAG, "race candidate down ${entry.index + 1}/${endpoints.size} err=${t?.message}")
-            if (remaining.isEmpty()) failConnecting(t?.message ?: "全部节点不可达（code=$closeCode）")
-            return
-        }
         if (ch !== channel || !wantConnected) return
         connectingGuard?.cancel()
         android.util.Log.w(LOG_TAG, "down phase=${_state.value.phase} code=$closeCode err=${t?.message}")
@@ -432,8 +390,24 @@ class RoomClient(private val scope: CoroutineScope) {
             wantConnected = false
             return
         }
+        // 4004=房间不存在（guest 兜底超时仍空房）：明确失败，不换节点（换节点同码同样找不到）
+        if (closeCode == 4004) {
+            _state.value = _state.value.copy(
+                phase = Phase.FAILED,
+                error = "房间不存在或已失效：请核对房间码，并确认房主已创建房间",
+            )
+            wantConnected = false
+            return
+        }
         if (_state.value.phase == Phase.CONNECTING) {
-            // 胜出通道在 welcome 前死掉：所有候选已试过，直接明确失败
+            // 首连失败：按确定性顺序换下一个候选（同房间所有设备同序，不会分裂），换完才 FAILED
+            if (endpointIndex + 1 < endpoints.size) {
+                endpointIndex++
+                _state.value = _state.value.copy(nodeIndex = endpointIndex + 1)
+                openSingle(connectGen)
+                scheduleConnectingGuard(connectGen)
+                return
+            }
             failConnecting(t?.message ?: "未知错误")
             return
         }
@@ -451,17 +425,17 @@ class RoomClient(private val scope: CoroutineScope) {
          *  WSS 流量形如普通 HTTPS，可达性远更好；TCP 作为兜底。首连失败按序自动切换。
          *  想自持化：任选 MQTT broker（EMQX/NanoMQ…）部署后填 mqtt://你的地址 */
         val DEFAULT_MQTT_ENDPOINTS = listOf(
-            "wss://broker-cn.emqx.io:8084/mqtt",
-            "wss://broker.emqx.io:8084/mqtt",
             "tcp://broker-cn.emqx.io:1883",
             "tcp://broker.emqx.io:1883",
+            "wss://broker-cn.emqx.io:8084/mqtt",
+            "wss://broker.emqx.io:8084/mqtt",
         )
 
-        /** 单次连接尝试的看门狗时限：paho connectionTimeout(5s) + DNS 余量 */
+        /** 单次连接尝试的看门狗时限：覆盖 HiveMQ 默认 30s 连接超时与 DNS 挂起 */
         const val CONNECTING_TIMEOUT_MS = 8_000L
 
-        /** 竞速开闸错峰：排序靠前的节点先一点起跑，打平 microRTT 时偏向国内节点 */
-        const val RACE_STAGGER_MS = 120L
+        /** 参与确定性轮转的主节点数（已验证可靠的 TCP 节点） */
+        const val TCP_PRIMARY_COUNT = 2
 
         /** JOINED 静默看门狗阈值：45s（≥3 个心跳周期）无对端消息即强制重连 */
         const val SILENCE_TIMEOUT_MS = 45_000L

@@ -7,9 +7,10 @@ import kotlinx.serialization.json.Json
 
 const val PARTY_PROTOCOL_VERSION = 1
 
-/** 房间成员（relay 维护，随 welcome/members 下发） */
+/** 房间成员（relay 维护或 MQTT 在场表合成，随 welcome/members 下发）。
+ *  rttMs = 该成员当前测得的「到房主」消息往返毫秒（房主自身为 null=锚点；未知亦 null） */
 @Serializable
-data class PartyMember(val id: String, val nick: String)
+data class PartyMember(val id: String, val nick: String, val rttMs: Long? = null)
 
 /**
  * 一起看 wire 协议（客户端 ↔ relay，classDiscriminator="t"）。
@@ -42,10 +43,16 @@ sealed interface PartyWire {
     @SerialName("members")
     data class Members(val host: String, val members: List<PartyMember> = emptyList()) : PartyWire
 
-    /** MQTT 模式的在场心跳（每 4s；host=true 为房主自荐/续任，房主选举取最小 id）。WS relay 忽略此类型 */
+    /** MQTT 模式的在场心跳（每 4s；host=true 为房主自荐/续任，房主选举取最小 id；
+     *  rttMs=发送者当前测得的到房主延迟，随心跳广播给全房间展示）。WS relay 忽略此类型 */
     @Serializable
     @SerialName("presence")
-    data class Presence(val nick: String = "", val host: Boolean = false, val from: String? = null) : PartyWire
+    data class Presence(
+        val nick: String = "",
+        val host: Boolean = false,
+        val rttMs: Long? = null,
+        val from: String? = null,
+    ) : PartyWire
 
     /** 房主 → 全员：权威播放状态。wall=发送时刻（guest 推算落位）；
      *  epoch 在 seek/换集等不连续点自增，guest 见到更大值立即硬对齐。
@@ -73,15 +80,16 @@ sealed interface PartyWire {
     @SerialName("sync")
     data class Sync(val at: Long = 0, val from: String? = null) : PartyWire
 
-    /** 应用层 ping（测 RTT）；WS relay 单播回 pong，MQTT 模式本机回环应答 */
+    /** 应用层 ping（测 RTT）。无 to：回环探测（MQTT 本机自答 / WS relay 单播回 pong）；
+     *  带 to=成员 id：定址探测（仅该成员回 pong），guest 量「到房主」延迟用 */
     @Serializable
     @SerialName("ping")
-    data class Ping(val at: Long, val from: String? = null) : PartyWire
+    data class Ping(val at: Long, val from: String? = null, val to: String? = null) : PartyWire
 
-    /** relay → 客户端：ping 的应答 */
+    /** ping 的应答。无 from/to：回环应答；带 from/to：定址应答（from=应答者，to=探测发起者） */
     @Serializable
     @SerialName("pong")
-    data class Pong(val at: Long) : PartyWire
+    data class Pong(val at: Long, val from: String? = null, val to: String? = null) : PartyWire
 }
 
 /** wire 编解码（与 relay 的 JSON 约定一致；坏消息静默丢弃，不让单条脏数据打断会话） */

@@ -47,10 +47,15 @@ internal class MqttChannel(
     private var lastMembersPayload = ""
     /** 本机是否现任房主（粘滞：welcome 时无人自荐即自任；被更大优先级自荐顶替时让位） */
     @Volatile private var selfIsHost = false
+    /** 当前房主 id（guest 定址 ping 探测「到房主」延迟用） */
+    @Volatile private var currentHostId: String? = null
+    /** 本机测得的到房主延迟（guest 定址 ping；房主为 null=锚点），随 presence 广播 */
+    @Volatile private var myHostRttMs: Long? = null
     /** 房主解析窗口截止时刻：窗口内不合成 welcome（等既存自荐者心跳），到点强制合成 */
     private var resolveDeadline = 0L
     private var resolveTask: ScheduledFuture<*>? = null
     private var presenceTask: ScheduledFuture<*>? = null
+    private var rttProbeTask: ScheduledFuture<*>? = null
 
     /** 解析端点 URI：tcp://h:p / ssl://h:p / ws(s)://h:p[/path]（mqtt:// 等价 tcp://，mqtts:// 等价 ssl://） */
     private data class EndpointParts(
@@ -110,10 +115,28 @@ internal class MqttChannel(
                             if (closed) return@scheduleAtFixedRate
                             runCatching {
                                 resolveAndBroadcast(forceWelcome = false)
-                                sendReliable(PartyWire.Presence(nick = nick, host = selfIsHost, from = selfId))
+                                sendReliable(
+                                    PartyWire.Presence(
+                                        nick = nick,
+                                        host = selfIsHost,
+                                        rttMs = if (selfIsHost) null else myHostRttMs,
+                                        from = selfId,
+                                    ),
+                                )
                             }
                         },
                         PRESENCE_PERIOD_MS, PRESENCE_PERIOD_MS, TimeUnit.MILLISECONDS,
+                    )
+                    // 「到房主」延迟探测（guest）：定址 ping 10s 一发，房主回 pong 量往返。
+                    // 时间戳是本机发出时写的、pong 原样带回——无时钟偏差
+                    rttProbeTask = scheduler.scheduleAtFixedRate(
+                        {
+                            if (closed || selfIsHost) return@scheduleAtFixedRate
+                            val host = currentHostId ?: return@scheduleAtFixedRate
+                            if (host == selfId) return@scheduleAtFixedRate
+                            runCatching { send(PartyWireCodec.encode(PartyWire.Ping(at = System.currentTimeMillis(), from = selfId, to = host)), qos = 0) }
+                        },
+                        RTT_PROBE_PERIOD_MS, RTT_PROBE_PERIOD_MS, TimeUnit.MILLISECONDS,
                     )
                     bridge.onOpen(this)
                 }.onFailure {
@@ -151,6 +174,7 @@ internal class MqttChannel(
         closed = true
         resolveTask?.cancel(false)
         presenceTask?.cancel(false)
+        rttProbeTask?.cancel(false)
         scheduler.shutdownNow()
         runCatching { client?.disconnect() }
     }
@@ -162,24 +186,53 @@ internal class MqttChannel(
         val msg = PartyWireCodec.decode(String(bytes)) ?: return
         val from = fromOf(msg) ?: return // 无 from 的消息不参与会话
         if (from == selfId) {
-            // 本机回环：ping 自答 pong（RTT≈链路往返），其余回显一律丢弃（替代 relay 的排除发送者）
-            if (msg is PartyWire.Ping) bridge.onMessage(this, PartyWireCodec.encode(PartyWire.Pong(at = msg.at)))
+            // 本机回环：无 to 的 ping 自答 pong（回环 RTT，同步落位补偿用）；
+            // 定址 ping（to=别人）的回显不答。其余回显一律丢弃（替代 relay 的排除发送者）
+            if (msg is PartyWire.Ping && (msg.to == null || msg.to == selfId)) {
+                bridge.onMessage(this, PartyWireCodec.encode(PartyWire.Pong(at = msg.at)))
+            }
             return
         }
-        android.util.Log.d(LOG_TAG, "incoming t=${msg::class.simpleName} from=$from")
+        android.util.Log.i(LOG_TAG, "incoming t=${msg::class.simpleName} from=$from")
         when (msg) {
             is PartyWire.Hello -> {
-                presence.record(from, msg.nick, hostClaim = false, System.currentTimeMillis())
+                presence.record(from, msg.nick, hostClaim = false, rttMs = null, nowMs = System.currentTimeMillis())
                 // 欢迎握手：新成员要等下一个心跳（≤4s）才能看到房主自荐，会超出 welcome 解析窗口——
-                // 看到新面孔立即补发一次在场宣告（含本机自荐状态），让它在窗口内完成房主解析
-                runCatching { sendReliable(PartyWire.Presence(nick = nick, host = selfIsHost, from = selfId)) }
+                // 看到新面孔立即补发一次在场宣告（含本机自荐状态与 RTT），让它在窗口内完成房主解析
+                runCatching {
+                    sendReliable(
+                        PartyWire.Presence(
+                            nick = nick,
+                            host = selfIsHost,
+                            rttMs = if (selfIsHost) null else myHostRttMs,
+                            from = selfId,
+                        ),
+                    )
+                }
                 resolveAndBroadcast(forceWelcome = false)
             }
 
             is PartyWire.Presence -> {
-                presence.record(from, msg.nick, msg.host, System.currentTimeMillis())
+                presence.record(from, msg.nick, msg.host, msg.rttMs, System.currentTimeMillis())
                 resolveAndBroadcast(forceWelcome = false)
             }
+
+            is PartyWire.Ping ->
+                // 定址 ping（to=我）：回 pong 带原 at（探测方量往返）；别人的定址 ping 不理会
+                if (msg.to == selfId) {
+                    runCatching { sendReliable(PartyWire.Pong(at = msg.at, from = selfId, to = from)) }
+                } else Unit
+
+            is PartyWire.Pong ->
+                // 定址 pong（to=我，from=房主）：量「到房主」往返并写进自己的在场条目随心跳广播
+                if (msg.to == selfId && msg.from == currentHostId) {
+                    val rtt = System.currentTimeMillis() - msg.at
+                    android.util.Log.i(LOG_TAG, "host rtt measured: ${rtt}ms")
+                    if (rtt in 0..60_000) {
+                        myHostRttMs = rtt
+                        presence.updateRtt(selfId, rtt, System.currentTimeMillis())
+                    }
+                } else Unit
 
             is PartyWire.State, is PartyWire.Chat, is PartyWire.Sync ->
                 bridge.onMessage(this, PartyWireCodec.encode(msg))
@@ -211,7 +264,8 @@ internal class MqttChannel(
      *  - 创建方（hostHint）：恒自任——断线重连凭稳定 id 立即夺回，成员表无缝衔接
      *  - 其余：TTL 内自荐者优先（取最小 id，防双自荐脑裂）；无人自荐（房主掉线自荐过期）→
      *    「含自己在内的最小 id 成员」接任——含自己才能保证所有成员算出同一结果、恰好一人接任
-     *  welcome 只发一次：解析窗口内等自荐，到点强制合成。 */
+     *  welcome 只发一次：guest 在「首个他人在场」时立即合成（兜底超时才强制）；
+     *  兜底时成员表仍空 = 这个节点上根本没有这个房间 → 4004 报「房间不存在」，绝不假扮房主 */
     private fun resolveAndBroadcast(forceWelcome: Boolean) {
         val now = System.currentTimeMillis()
         val host = MqttHostPolicy.resolveHost(
@@ -221,17 +275,29 @@ internal class MqttChannel(
             hostHint = hostHint,
         )
         selfIsHost = host == selfId
+        currentHostId = host
+        // 成员表含自己（回显过滤导致自己的 presence 不在表里）；自己的 RTT = 测得的到房主延迟
+        val membersWithSelf = presence.members(now)
+            .filterNot { it.id == selfId }
+            .plus(PartyMember(selfId, nick, rttMs = if (selfIsHost) null else myHostRttMs))
+            .sortedBy { it.id }
         val membersPayload = PartyWireCodec.encode(
-            PartyWire.Members(host = host, members = presence.members(now)),
+            PartyWire.Members(host = host, members = membersWithSelf),
         )
         if (!welcomed) {
             // guest：成员表仍空且未到兜底超时 → 继续等（收到首个他人 presence 会立即进入合成）
             if (!hostHint && !forceWelcome && now < resolveDeadline && presence.members(now).isEmpty()) return
+            if (!hostHint && presence.members(now).isEmpty()) {
+                // guest 兜底仍空房：房间不存在（码错/房主未创建/不在同一节点），明确失败不假扮房主
+                android.util.Log.w(LOG_TAG, "guest resolve timeout with empty room: room not found")
+                bridge.onDown(this, java.net.ConnectException("房间不存在或已失效"), 4004)
+                return
+            }
             welcomed = true
             lastMembersPayload = membersPayload
             bridge.onMessage(
                 this,
-                PartyWireCodec.encode(PartyWire.Welcome(you = selfId, host = host, members = presence.members(now))),
+                PartyWireCodec.encode(PartyWire.Welcome(you = selfId, host = host, members = membersWithSelf)),
             )
             return
         }
@@ -258,6 +324,7 @@ internal class MqttChannel(
         is PartyWire.Chat -> msg.from
         is PartyWire.Sync -> msg.from
         is PartyWire.Ping -> msg.from
+        is PartyWire.Pong -> msg.from // 定址 pong（from=房主）参与 RTT 测量，不能在此丢弃
         else -> null
     }
 
@@ -265,5 +332,6 @@ internal class MqttChannel(
         /** guest 的 welcome 兜底超时：房主在场时不生效（首个 presence 即合成） */
         private const val RESOLVE_TIMEOUT_MS = 3_000L
         private const val PRESENCE_PERIOD_MS = 4_000L
+        private const val RTT_PROBE_PERIOD_MS = 10_000L
     }
 }

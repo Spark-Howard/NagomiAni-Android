@@ -39,10 +39,11 @@ app/src/main/java/com/sparkhoward/nagomiani/
 │   ├── notify/            EpisodeNotify（云端番库更新提醒）+ DailyAiringNotifier（今日放送提醒）
 │   ├── online/            WeeklyCalendar（放送周历 ±7 天窗口、日期升序、初始定位今天）、WeeklyAggregator、SourceSearchCache
 │   ├── store/AppStore.kt  DataStore 集中存储（设置/绑定/续播/云端番库/观看历史/测速/待同步队列）
-│   ├── watchparty/        一起看：WatchPartySync（落位/漂移纯逻辑）+ RoomClient（MQTT 多节点 WSS 并行竞速，
-│   │                      不走应用内代理，零配置）+ MqttChannel（HiveMQ 内核；paho 在部分 Android 环境
-│   │                      connect 挂起故弃用）/PresenceTable/MqttHostPolicy（无服务器在场广播与房主裁决）+
-│   │                      LocalRoomServer（房主内嵌 WS 中继，备用）；自建 relay 在 server/
+│   ├── watchparty/        一起看：WatchPartySync（落位/漂移纯逻辑）+ RoomClient（MQTT 公共节点零配置；
+│   │                      节点按房间码哈希确定性选择——同房间必同节点防分裂，TCP 主/WSS 兜底轮换）+
+│   │                      MqttChannel（HiveMQ 内核，paho 在部分 Android 环境 connect 挂起故弃用；
+│   │                      定址 ping 测成员到房主延迟随在场广播）+ PresenceTable/MqttHostPolicy（在场与房主
+│   │                      裁决）+ LocalRoomServer（备用）；自建 relay 在 server/
 │   ├── download/          离线缓存（CacheDataSource + 前台服务）
 │   └── update/            UpdateCenter（GitHub Releases 应用内更新）
 ├── player/                PlayerViewModel/Screen（ExoPlayer）、弹幕渲染、迷你小窗、截图分享卡

@@ -165,12 +165,13 @@ fun WatchPartySheet(
                         party.members.forEach { member ->
                             val isSelf = member.id == party.selfId
                             val isHost = member.id == party.hostId
+                            val label = buildString {
+                                append(member.nick)
+                                if (isHost) append(" · 房主")
+                                if (isSelf) append("（我）")
+                            }
                             Text(
-                                buildString {
-                                    append(member.nick)
-                                    if (isHost) append(" · 房主")
-                                    if (isSelf) append("（我）")
-                                },
+                                text = member.rttMs?.let { "$label ${it}ms" } ?: label,
                                 color = if (isSelf) NagomiColors.accent else Color.White.copy(alpha = 0.85f),
                                 fontSize = 12.sp,
                                 modifier = Modifier
@@ -240,7 +241,7 @@ fun WatchPartySheet(
                 // 未入房：创建 / 加入两个独立入口（与首页入口卡同构；加入走独立对话框）
                 if (party.phase == RoomClient.Phase.CONNECTING) {
                     Text(
-                        if (party.nodeCount > 1) "正在连接房间服务器（${party.nodeCount} 个节点并行竞速）…"
+                        if (party.nodeCount > 1) "正在连接房间服务器（节点 ${party.nodeIndex}/${party.nodeCount}）…"
                         else "正在连接房间服务器…",
                         color = NagomiColors.accent,
                         fontSize = 12.sp,

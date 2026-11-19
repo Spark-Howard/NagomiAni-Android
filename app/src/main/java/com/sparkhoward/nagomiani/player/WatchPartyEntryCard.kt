@@ -31,6 +31,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.ViewModelStoreOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.sparkhoward.nagomiani.core.watchparty.PartyMember
 import com.sparkhoward.nagomiani.core.watchparty.RoomClient
 import com.sparkhoward.nagomiani.ui.theme.NagomiColors
 import com.sparkhoward.nagomiani.ui.theme.NagomiPillAction
@@ -57,8 +58,9 @@ fun WatchPartyEntryCard(
 
     if (party.phase == RoomClient.Phase.JOINED) {
         val watching = hostWatching // 委托属性不能 smart cast，先落地局部值
-        // 会话状态条：房间码 + 身份 + 房主在看什么（guest 可点击跳详情页）
-        Row(
+        var showMembers by remember { mutableStateOf(false) }
+        // 会话状态条：房间码 + 身份 + 房主在看什么 + 成员胶囊（含每人到房主延迟）
+        Column(
             modifier
                 .fillMaxWidth()
                 .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(12.dp))
@@ -66,40 +68,77 @@ fun WatchPartyEntryCard(
                     watching?.let { if (it.subjectId > 0) onOpenDetail(it.subjectId) }
                 }
                 .padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(Icons.Filled.Groups, null, tint = NagomiColors.accent, modifier = Modifier.size(18.dp))
-            Spacer(Modifier.width(8.dp))
-            Column(Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Filled.Groups, null, tint = NagomiColors.accent, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "一起看 · 房间 ${party.roomCode}" + (if (party.role == RoomClient.Role.HOST) "（你是房主）" else ""),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        when {
+                            party.role == RoomClient.Role.GUEST && watching != null ->
+                                buildString {
+                                    append("房主在看")
+                                    watching.title?.let { append("《${it}》") }
+                                    append("第 ${watching.episodeNumber} 集")
+                                    if (watching.subjectId > 0) append(" · 点此前往")
+                                }
+                            // guest 已入房但还没收到房主的状态：明确「等开播」而不是含糊的同步说明
+                            party.role == RoomClient.Role.GUEST -> "已入房，等待房主开播…"
+                            party.role == RoomClient.Role.HOST -> "开播后朋友自动跟随你的进度"
+                            else -> "播放同一集即自动同步"
+                        },
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                // 成员入口：点击打开成员面板（昵称/身份/每人到房主延迟）
                 Text(
-                    "一起看 · 房间 ${party.roomCode}" + (if (party.role == RoomClient.Role.HOST) "（你是房主）" else ""),
-                    fontSize = 13.sp,
+                    "成员 ${party.members.size}",
+                    fontSize = 12.sp,
+                    color = NagomiColors.accent,
                     fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier
+                        .clickable { showMembers = true }
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
                 )
-                Text(
-                    when {
-                        party.role == RoomClient.Role.GUEST && watching != null ->
-                            buildString {
-                                append("房主在看")
-                                watching.title?.let { append("《${it}》") }
-                                append("第 ${watching.episodeNumber} 集")
-                                if (watching.subjectId > 0) append(" · 点此前往")
-                            }
-                        party.role == RoomClient.Role.HOST -> "开播后朋友自动跟随你的进度"
-                        else -> "播放同一集即自动同步"
-                    },
-                    fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                Icon(
+                    Icons.Filled.Logout,
+                    "退出房间",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier
+                        .size(20.dp)
+                        .clickable { viewModel.leaveWatchParty("已退出一起看") }
+                        .padding(4.dp),
                 )
             }
-            Icon(
-                Icons.Filled.Logout,
-                "退出房间",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier
-                    .size(20.dp)
-                    .clickable { viewModel.leaveWatchParty("已退出一起看") }
-                    .padding(4.dp),
+            // 成员胶囊行：在线成员一览（nick + 到房主延迟），始终可见
+            Row(
+                Modifier.padding(top = 6.dp),
+                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp),
+            ) {
+                party.members.take(4).forEach { member ->
+                    MemberChip(
+                        member = member,
+                        isSelf = member.id == party.selfId,
+                        isHost = member.id == party.hostId,
+                    )
+                }
+                if (party.members.size > 4) {
+                    MemberChip(member = PartyMember(id = "+", nick = "+${party.members.size - 4}"), isSelf = false, isHost = false)
+                }
+            }
+        }
+        if (showMembers) {
+            WatchPartyMembersDialog(
+                party = party,
+                watching = watching,
+                onDismiss = { showMembers = false },
+                onOpenDetail = onOpenDetail,
             )
         }
         return
@@ -127,7 +166,7 @@ fun WatchPartyEntryCard(
 
         if (party.phase == RoomClient.Phase.CONNECTING) {
             Text(
-                if (party.nodeCount > 1) "正在连接房间服务器（${party.nodeCount} 个节点并行竞速）…"
+                if (party.nodeCount > 1) "正在连接房间服务器（节点 ${party.nodeIndex}/${party.nodeCount}）…"
                 else "正在连接房间服务器…",
                 fontSize = 11.sp,
                 color = NagomiColors.accent,

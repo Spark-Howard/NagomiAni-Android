@@ -6,21 +6,32 @@ package com.sparkhoward.nagomiani.core.watchparty
  * - 成员 = TTL 内有心跳的人（超时自动出局，替代 relay 的 close 通知）
  * - 房主 = TTL 内自荐（presence.host=true）的成员中 id 最小者——创建者先自荐当房主，
  *   掉线后其自荐过期，剩余成员中最小 id 自动接任（对齐 VM 既有的「顺位接棒」语义）
+ * - 每个成员随心跳携带自己测得的「到房主」延迟（rttMs），全房间可见
  */
 class PresenceTable(private val ttlMs: Long = MEMBER_TTL_MS) {
 
-    private data class Entry(val nick: String, val hostClaim: Boolean, val lastSeen: Long)
+    private data class Entry(val nick: String, val hostClaim: Boolean, val rttMs: Long?, val lastSeen: Long)
 
     private val entries = LinkedHashMap<String, Entry>()
 
     @Synchronized
-    fun record(id: String, nick: String, hostClaim: Boolean, nowMs: Long) {
-        entries[id] = Entry(nick.ifBlank { "路人" }.take(24), hostClaim, nowMs)
+    fun record(id: String, nick: String, hostClaim: Boolean, rttMs: Long?, nowMs: Long) {
+        entries[id] = Entry(nick.ifBlank { "路人" }.take(24), hostClaim, rttMs, nowMs)
     }
 
     @Synchronized
     fun remove(id: String) {
         entries.remove(id)
+    }
+
+    /** 某成员最新 RTT（本机测量后写入自己条目用）；成员不存在返回 null */
+    @Synchronized
+    fun rttOf(id: String): Long? = entries[id]?.rttMs
+
+    @Synchronized
+    fun updateRtt(id: String, rttMs: Long?, nowMs: Long) {
+        val e = entries[id] ?: return
+        entries[id] = e.copy(rttMs = rttMs, lastSeen = nowMs)
     }
 
     /** TTL 内自荐房主的成员中取最小 id；无人自荐返回 null（调用方按最小 id 成员接任） */
@@ -37,7 +48,7 @@ class PresenceTable(private val ttlMs: Long = MEMBER_TTL_MS) {
     @Synchronized
     fun members(nowMs: Long): List<PartyMember> =
         entries.filterValues { nowMs - it.lastSeen <= ttlMs }
-            .map { (id, e) -> PartyMember(id, e.nick) }
+            .map { (id, e) -> PartyMember(id, e.nick, e.rttMs) }
             .sortedBy { it.id }
 
     companion object {

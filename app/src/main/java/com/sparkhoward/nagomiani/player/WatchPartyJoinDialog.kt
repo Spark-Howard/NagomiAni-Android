@@ -50,7 +50,7 @@ internal fun WatchPartyJoinDialog(viewModel: PlayerViewModel, onDismiss: () -> U
             Column {
                 if (connecting) {
                     Text(
-                        if (party.nodeCount > 1) "正在连接房间服务器（${party.nodeCount} 个节点并行竞速）…"
+                        if (party.nodeCount > 1) "正在连接房间服务器（节点 ${party.nodeIndex}/${party.nodeCount}）…"
                         else "正在连接房间服务器…",
                         color = NagomiColors.accent,
                         fontSize = 12.sp,
